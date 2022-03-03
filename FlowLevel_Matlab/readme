@@ -1,2 +1,4 @@
 Flow level testbed for joint routing and computation
 Matlab version R2017b
+"RouteComputeNetwork_FlowLevel.m": Algorithm implementation for arbitrary cost functions.
+"LinearCostMILP.m": Verification of the equivalence of am replaced by am+b/r when b neq 0, using MILP to find global optimum. 
