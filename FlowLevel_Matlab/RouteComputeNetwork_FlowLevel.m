@@ -85,7 +85,8 @@ a_m = 0.5*ones(1,M);
 b_overhead = 0; % b in paper
 
 %% Generate initial state
-Initial_Type = 'MILP'; % find a feasibe point using MILP with some arbitrary objective
+Initial_Type = 'MILP'; % MILP: find a feasibe point using MILP with some arbitrary objective; MILP_RA: random allocation based on a MILP init
+Is_Initial_Local = 1; % 1: force the initial to be local (or nearest-datasource) computation.
 
 if strcmp(Network_Type,'example_1')
     Phi_minus_init = [0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0];
@@ -102,35 +103,67 @@ else
     elseif strcmp(CompCost_type, 'sum_linear')
         CompCap = sum(sum(InputRate)) * CompCost_para;
     end
-    if strcmp(Initial_Type,'MILP')
+    if strcmp(Initial_Type,'MILP') || strcmp(Initial_Type,'MILP_RA')
         Capacity_Saturate_Factor = 0.9; % the maximum allowed fraction of capacity
-        [Is_Success,f_minus_init,f_plus_init,g_comp_init] = Init_Generator_MILP(Adj,Task,InputRate,a_m,b_overhead,LinkCap*Capacity_Saturate_Factor,CompCap*Capacity_Saturate_Factor);
+        [Is_Success,f_minus_init,f_plus_init,g_comp_init] = Init_Generator_MILP(Adj,Task,InputRate,a_m,b_overhead,LinkCap*Capacity_Saturate_Factor,CompCap*Capacity_Saturate_Factor,Is_Initial_Local);
         if ~Is_Success
             error('ERROR: No Feasible Initial State!  Will abort.\n');
         end
         [Phi_minus_init,Phi_plus_init] = FtoPhi(Adj,Task,InputRate,a_m,b_overhead,f_minus_init,f_plus_init,g_comp_init,eps);
+        if strcmp(Initial_Type,'MILP_RA')
+            [LinkFlow_init,CompFlow_init,t_minus_init,t_plus_init,Is_Loopfree] ...
+                = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_init,Phi_plus_init,eps);
+            
+            [Delay_init,Delay_deri_init,CompCost_init,CompCost_deri_init] ...
+                = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_init,CompFlow_init,eps);
+            
+            [Margin_node_minus_init,Mgarin_node_plus_init,Margin_link_minus_init,Margin_link_plus_init] ...
+                = Broadcast_Margin(Adj,Task,InputRate,a_m,b_overhead,Phi_minus_init,Phi_plus_init,...
+                Delay_deri_init,CompCost_deri_init,t_minus_init,eps);
+            
+            [Is_Blocked_minus_init,Is_Blocked_plus_init] ...
+                = Update_Blocked(Adj,Task,Phi_minus_init,Phi_plus_init,Margin_node_minus_init,Mgarin_node_plus_init,eps);
+            MAX_TRAIL = 10;
+            for i_trail = 1:MAX_TRAIL
+                [Phi_minus_init_RA,Phi_plus_init_RA] ...
+                    = Update_Phi_RA(Adj,Task,Is_Blocked_minus_init,Is_Blocked_plus_init,eps);
+                if Check_Phi_Valid(Adj,M,Task,InputRate,a_m,b_overhead,Phi_minus_init_RA,Phi_plus_init_RA, LinkCap, CompCap,eps) == 1
+                    break
+                end
+                if i_trail == MAX_TRAIL % if still not valid, return old setting
+                    fprintf('MILP_RA validation fail, will remain MILP setting.\n');
+                end
+            end
+            Phi_minus_init = Phi_minus_init_RA;
+            Phi_plus_init = Phi_plus_init_RA;
+        end
     end
-    if strcmp(Network_Type,'example_1')
-        Phi_minus_init = [0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0];
-        Phi_plus_init = [0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 0];
-    end
+%     if strcmp(Network_Type,'example_1')
+%         Phi_minus_init = [0 0 0 0 1 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0];
+%         Phi_plus_init = [0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 0];
+%     end
 end
 %% Algorithm Parameters
 T_MAX = 100; % max iteration number;
 EPS_STOP_ratio = 1e-3; % stop if total cost does not decrease more than this ratio
 
 Is_Use_GP = 1;      % if using method: Gradient Projection (scaled matrix = I)
-Is_Use_SGP = 0;     % if using method: Scaled Gradient Projection
+Is_Use_SGP = 1;     % if using method: Scaled Gradient Projection
 Is_Use_RA = 0;      % if using method: random allocation
-Is_Use_1Hop = 0;    % if using method: optimal 1-hop
-Is_Use_Local = 0;   % if using method: local computation (with necessary offloading)
+Is_Use_Local = 1;   % if using method: local computation(nearest offloading) + optimal routing
+Is_Use_LPR = 0;     % if using method: linear programming (relaxed) and rouding, in paper [3]'A Distributed Framework for Task Offloading in Edge Computing Networks of Arbitrary Topology'
+
+Is_Use_2Hop = 0;    % if using method: optimal 2-hop
+Is_Use_MinHop = 0;  % if using method: Min hop routing + optimal offloading
+Is_Use_GBA = 0;    % if using method: (Game Based Algorithm) Nash-eq established in paper [1]'Multi-Hop Cooperative Computation Offloading for Industrial IoT¨CEdge¨CCloud Computing Environments'
 Is_Use_BP = 0;      % if using method: Backpressure
 Is_Use_LB = 0;      % if using method: Lower bound generalized with centralized flow-model optimization with am replaced by am+b/ti-, not accurate
-Is_Use_Offline = 1;     % if using method: contralized flow-model optimization that ignore b, only performed at initailziation, not accurate
+Is_Use_Offline = 0;     % if using method: contralized flow-model optimization that ignore b, only performed at initailziation, not accurate
 
 if Is_Use_GP
-    %StepSize_GP = 0.1./ sqrt(1:T_MAX); % use universal stepsize alpha = c/sqrt(t);
-    StepSize_GP = 0.1* ones(1,T_MAX); % use universal stepsize alpha = c/sqrt(t);
+    %StepSize_GP = 0.01 .* (1:T_MAX).^0.4; % use universal stepsize alpha = c/sqrt(t);
+    %StepSize_GP = 0.01 .* 1./sqrt(1:T_MAX); % use universal stepsize alpha = c/sqrt(t);
+    StepSize_GP = 0.02* ones(1,T_MAX); % use universal stepsize alpha = c/sqrt(t);
     TotalCost_GP = NaN * ones(1,T_MAX);
     Phi_minus_GP_current = Phi_minus_init;
     Phi_plus_GP_current = Phi_plus_init;
@@ -139,6 +172,27 @@ if Is_Use_SGP
     TotalCost_SGP = NaN * ones(1,T_MAX);
     Phi_minus_SGP_current = Phi_minus_init;
     Phi_plus_SGP_current = Phi_plus_init;
+end
+if Is_Use_RA
+    TotalCost_RA = NaN * ones(1,T_MAX);
+    Phi_minus_RA_current = Phi_minus_init;
+    Phi_plus_RA_current = Phi_plus_init;
+end
+if Is_Use_Local
+    TotalCost_Local = NaN * ones(1,T_MAX);
+    if Is_Initial_Local == 1 % only perform local computation method if start with a local scheme
+    Phi_minus_Local_current = Phi_minus_init; 
+    Phi_plus_Local_current = Phi_plus_init;
+    else
+       error('ERROR: Not start with Local computation!\n') 
+    end
+end
+if Is_Use_LPR
+    TotalCost_LPR = NaN * ones(1,T_MAX);
+    Adj_previous = []; % set basic information to empty, will only re-performce LPR once after a scenario change
+    M_previous = [];
+    Task_previous = [];
+    InputRate_previous = [];
 end
 if Is_Use_LB
     TotalCost_LB = NaN * ones(1,T_MAX);
@@ -161,14 +215,13 @@ if Is_Use_Offline
 end
 
 %% run
-
 for iter_t = 1:T_MAX
     if mod(iter_t, 1 ) == 0
         fprintf('Iteration no. %d\n',iter_t);
     end
     if Is_Use_GP % if using gradient projection algorithm
         % update and save current statues
-        [LinkFlow_GP_current,CompFlow_GP_current,t_minus_GP_current,t_plus_GP_current] ...
+        [LinkFlow_GP_current,CompFlow_GP_current,t_minus_GP_current,t_plus_GP_current,Is_Loopfree] ...
             = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_GP_current,Phi_plus_GP_current,eps);
         
         [Delay_GP_current,Delay_deri_GP_current,CompCost_GP_current,CompCost_deri_GP_current] ...
@@ -192,7 +245,7 @@ for iter_t = 1:T_MAX
     
     if Is_Use_SGP % if using scaled gradient projection algorithm
         % update and save current statues
-        [LinkFlow_SGP_current,CompFlow_SGP_current,t_minus_SGP_current,t_plus_SGP_current] ...
+        [LinkFlow_SGP_current,CompFlow_SGP_current,t_minus_SGP_current,t_plus_SGP_current,Is_Loopfree] ...
             = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_SGP_current,Phi_plus_SGP_current,eps);
         
         [Delay_SGP_current,Delay_deri_SGP_current,CompCost_SGP_current,CompCost_deri_SGP_current] ...
@@ -212,6 +265,75 @@ for iter_t = 1:T_MAX
         % overwrite
         Phi_minus_SGP_current = Phi_minus_SGP_next;
         Phi_plus_SGP_current = Phi_plus_SGP_next;
+    end
+    
+    if Is_Use_RA % if using random allocation
+        % update and save current statues
+        [LinkFlow_RA_current,CompFlow_RA_current,t_minus_RA_current,t_plus_RA_current,Is_Loopfree] ...
+            = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_RA_current,Phi_plus_RA_current,eps);
+        
+        [Delay_RA_current,Delay_deri_RA_current,CompCost_RA_current,CompCost_deri_RA_current] ...
+            = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_RA_current,CompFlow_RA_current,eps);
+        
+        TotalCost_RA(iter_t) = sum(sum(Delay_RA_current)) + sum(sum(CompCost_RA_current));
+        
+        [Phi_minus_RA_next,Phi_plus_RA_next] ...
+            = Iteration_RA(Adj,M,Task,InputRate,a_m,b_overhead,LinkCap,CompCap,Phi_minus_RA_current,Phi_plus_RA_current,...
+    Delay_deri_RA_current,CompCost_deri_RA_current,t_minus_RA_current,eps);
+        % overwrite
+        Phi_minus_RA_current = Phi_minus_RA_next;
+        Phi_plus_RA_current = Phi_plus_RA_next;
+    end
+    
+    if Is_Use_Local % if using local (neareast to data source) computation
+        % update and save current statues
+        [LinkFlow_Local_current,CompFlow_Local_current,t_minus_Local_current,t_plus_Local_current,Is_Loopfree] ...
+            = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_Local_current,Phi_plus_Local_current,eps);
+        
+        [Delay_Local_current,Delay_deri_Local_current,CompCost_Local_current,CompCost_deri_Local_current] ...
+            = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_Local_current,CompFlow_Local_current,eps);
+        
+        TotalCost_Local(iter_t) = sum(sum(Delay_Local_current)) + sum(sum(CompCost_Local_current));
+        
+        % update variable: using SGP for phi+, but keep phi-
+        [Phi_minus_Local_next,Phi_plus_Local_next] ...
+            = Iteration_Local(Adj,Task,InputRate,a_m,b_overhead,[],Phi_minus_Local_current,Phi_plus_Local_current,...
+            LinkFlow_Local_current,CompFlow_Local_current,t_minus_Local_current,t_plus_Local_current,Delay_deri_Local_current,...
+            CompCost_deri_Local_current,Capacity_Saturate_Factor,eps);
+        % overwrite
+        Phi_minus_Local_current = Phi_minus_Local_next;
+        Phi_plus_Local_current = Phi_plus_Local_next;
+    end
+    
+    if Is_Use_LPR % if using linear programming and rounding provided in eq(11) in paper [3]
+        % first compare current topology and task with previous, only perform LPR if t=1 or there's a topology change
+        Is_reperform_LPR = 0;
+        if ~isequal(Adj,Adj_previous)
+            Is_reperform_LPR = 1;
+        elseif ~isequal(Task,Task_previous)
+            Is_reperform_LPR = 1;
+        elseif ~isequal(InputRate,InputRate_previous)
+            Is_reperform_LPR = 1;
+        end
+        if Is_reperform_LPR == 1 % if any of Adj,Task and InputRate has changed, reperform LPR
+            
+            [Phi_minus_LPR,Phi_plus_LPR] = Update_Phi_LPR(Adj,Task,InputRate,a_m,b_overhead,...
+                Delay_type,CompCost_type,Delay_para,CompCost_para,Capacity_Saturate_Factor,eps);
+            
+            [LinkFlow_LPR_current,CompFlow_LPR_current,t_minus_LPR_current,t_plus_LPR_current,Is_Loopfree] ...
+                = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_LPR,Phi_plus_LPR,eps);
+            [Delay_LPR_current,Delay_deri_LPR_current,CompCost_LPR_current,CompCost_deri_LPR_current] ...
+                = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_LPR_current,CompFlow_LPR_current,eps);
+            
+            TotalCost_LPR(iter_t) = sum(sum(Delay_LPR_current)) + sum(sum(CompCost_LPR_current));
+            
+            Adj_previous = Adj;
+            Task_previous = Task;
+            InputRate_previous = InputRate;
+            
+        else % if non of these changed, keep previous result
+            TotalCost_LPR(iter_t) = TotalCost_LPR(iter_t-1)
+        end
     end
     
     if Is_Use_LB % if using LB, must use GP/SGP to generate initial points and ti-
@@ -239,19 +361,29 @@ end
 %% plot
 figure(2)
 if Is_Use_GP
-    plot(TotalCost_GP,'b-')
+    plot(TotalCost_GP(1:end),'b-')
     hold on
 end
 if Is_Use_SGP
-    plot(TotalCost_SGP,'r-')
+    plot(TotalCost_SGP(1:end),'r-')
+    hold on
+end
+if Is_Use_RA
+    TotalCost_RA_plot = TotalCost_RA(1:end);
+    plot(sum(TotalCost_RA_plot)/ length(TotalCost_RA_plot) * ones(1,length(TotalCost_RA_plot)),'g-') % Averaged over time
+    %plot(TotalCost_RA(1:end),'y-') % plain plot
+    hold on
+end
+if Is_Use_Local
+    plot(TotalCost_Local(1:end),'g-')
     hold on
 end
 if Is_Use_LB
-    plot(TotalCost_LB,'y-')
+    plot(TotalCost_LB(1:end),'y-')
     hold on
 end
 if Is_Use_Offline
-    plot(TotalCost_Offline,'m')
+    plot(TotalCost_Offline(1:end),'m')
     hold on
 end
 %hold off
@@ -265,8 +397,8 @@ save(SaveDataFileName);
 if Is_debugTest == 1
     
     
-    [LinkFlow,CompFlow,t_minus,t_plus] = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_init,Phi_plus_init,eps);
-    
+    [LinkFlow,CompFlow,t_minus,t_plus,Is_Loopfree] = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_init,Phi_plus_init,eps);
+    Is_Valid = Check_Phi_Valid(Adj,M,Task,InputRate,a_m,b_overhead,Phi_minus_init,Phi_plus_init, LinkCap, CompCap,eps)
     
     
     Task
@@ -330,7 +462,7 @@ if Is_debugTest == 1
         Phi_plus_next_mat = reshape(Phi_plus_next,N_node,N_node)'
     end
     
-    [LinkFlow_next,CompFlow_next,t_minus_next,t_plus_next] = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_next,Phi_plus_next,eps)
+    [LinkFlow_next,CompFlow_next,t_minus_next,t_plus_next,Is_Loopfree] = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_next,Phi_plus_next,eps)
     [Delay_next,Delay_deri_next,CompCost_next,CompCost_deri_next] = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_next,CompFlow_next,eps)
     Cost = sum(sum(Delay)) + sum(sum(CompCost))
     TotalCost_Opt_Offline
@@ -391,6 +523,120 @@ function [Phi_minus_SGP_next,Phi_plus_SGP_next] = ...
 
 end
 
+function [Phi_minus_RA_next,Phi_plus_RA_next] = ...
+    Iteration_RA(Adj,M,Task,InputRate,a_m,b_overhead,LinkCap,CompCap,Phi_minus_RA_current,Phi_plus_RA_current,...
+    Delay_deri_RA_current,CompCost_deri_RA_current,t_minus_RA_current,eps)
+% Random allocation: Calculate the marginals and blocked nodes, then random assign phi-/phi+ in feasible set, and under capacity constraint.
+
+[Margin_node_minus_RA_current,Mgarin_node_plus_RA_current,Margin_link_minus_RA_current,Margin_link_plus_RA_current] ...
+    = Broadcast_Margin(Adj,Task,InputRate,a_m,b_overhead,Phi_minus_RA_current,Phi_plus_RA_current,...
+    Delay_deri_RA_current,CompCost_deri_RA_current,t_minus_RA_current,eps);
+
+[Is_Blocked_minus_RA_current,Is_Blocked_plus_RA_current] ...
+    = Update_Blocked(Adj,Task,Phi_minus_RA_current,Phi_plus_RA_current,Margin_node_minus_RA_current,Mgarin_node_plus_RA_current,eps);
+
+% generate multiple times until valid
+MAX_TRAIL = 10;
+for i_trail = 1:MAX_TRAIL
+    [Phi_minus_RA_next,Phi_plus_RA_next] ...
+        = Update_Phi_RA(Adj,Task,Is_Blocked_minus_RA_current,Is_Blocked_plus_RA_current,eps);
+    if Check_Phi_Valid(Adj,M,Task,InputRate,a_m,b_overhead,Phi_minus_RA_next,Phi_plus_RA_next, LinkCap, CompCap,eps) == 1
+        break
+    end
+    if i_trail == MAX_TRAIL % if still not valid, return old setting
+        fprintf('RA validation fail, will remain current setting.\n');
+        Phi_minus_RA_next = Phi_minus_RA_current;
+        Phi_plus_RA_next = Phi_plus_RA_current;
+        return
+    end
+end
+end
+
+
+function [Phi_minus_Local_next,Phi_plus_Local_next] = ...
+    Iteration_Local(Adj,Task,InputRate,a_m,b_overhead,~,Phi_minus_Local_current,Phi_plus_Local_current,LinkFlow_Local_current,CompFlow_Local_current,...
+    t_minus_Local_current,t_plus_Local_current,Delay_deri_Local_current,CompCost_deri_Local_current,Capacity_Saturate_Factor,eps)
+% Main iteration for local (nearest to data source) computation
+% use SGP method to the result flow, while keep the data flow unchanged, since the initiator is made to local computation
+
+% update marginal delay pD/pr and pD/pt via broadcasting
+[Margin_node_minus_Local_current,Mgarin_node_plus_Local_current,Margin_link_minus_Local_current,Margin_link_plus_Local_current] ...
+    = Broadcast_Margin(Adj,Task,InputRate,a_m,b_overhead,Phi_minus_Local_current,Phi_plus_Local_current,...
+    Delay_deri_Local_current,CompCost_deri_Local_current,t_minus_Local_current,eps);
+
+% calculate bloacked nodes
+[Is_Blocked_minus_Local_current,Is_Blocked_plus_Local_current] ...
+    = Update_Blocked(Adj,Task,Phi_minus_Local_current,Phi_plus_Local_current,Margin_node_minus_Local_current,Mgarin_node_plus_Local_current,eps);
+
+% calculate scale matrix using SGP method
+[Scale_Mat_minus,Scale_Mat_plus] ... % input 'SGP' as type parameter
+    = Update_Scale_Matrix(Adj,Task,[],Phi_minus_Local_current,Phi_plus_Local_current,Is_Blocked_minus_Local_current,Is_Blocked_plus_Local_current, ...
+    t_minus_Local_current,t_plus_Local_current,Margin_link_minus_Local_current,Margin_link_plus_Local_current,'SGP',Capacity_Saturate_Factor,eps);
+
+% new phi after projection
+[Phi_minus_Local_next,Phi_plus_Local_next] ...
+    = Update_Phi_Local(Adj,Task,Phi_minus_Local_current,Phi_plus_Local_current,Margin_link_minus_Local_current,Margin_link_plus_Local_current, ...
+    Scale_Mat_minus,Scale_Mat_plus,Is_Blocked_minus_Local_current,Is_Blocked_plus_Local_current,eps);
+
+end
+
+
+function [Phi_minus_RA_next,Phi_plus_RA_next] = ...
+    Update_Phi_RA(Adj,Task,Is_Blocked_minus_RA_current,Is_Blocked_plus_RA_current,eps)
+% Update phi randomly in the feasible set specified by blocked nodes
+N_node = length(Adj);
+N_task = size(Task,1);
+length_Phi_minus = N_node * (N_node + 1) * N_task;
+length_Phi_plus = N_node * N_node * N_task;
+Phi_minus_RA_next = zeros(length_Phi_minus,1);
+Phi_plus_RA_next = zeros(length_Phi_plus,1);
+for t_index = 1:N_task
+   t_dest = Task(t_index,1); 
+   for node_i = 1:N_node
+      Is_Available_minus = Adj(node_i,:); % marks of available nodes (with out-link and not blocked)
+      Is_Available_plus = Adj(node_i,:);
+      for node_j = find(Adj(node_i,:))
+         Is_Blocked_pos =  (node_i -1)*N_node*N_task + (node_j-1)*N_task + t_index;
+         if Is_Blocked_minus_RA_current(Is_Blocked_pos) == 1
+             Is_Available_minus(node_j) = 0;
+         end
+         if Is_Blocked_plus_RA_current(Is_Blocked_pos) == 1
+             Is_Available_plus(node_j) = 0;
+         end
+      end
+      list_Available_minus = [0 find(Is_Available_minus)];
+      list_Available_plus = find(Is_Available_plus);
+      %length_Available_minus = sum(Is_Available_minus); % number of available nodes
+      %length_Available_plus = sum(Is_Available_plus);
+      phi_minus = rand(1,length(list_Available_minus)); % note: include 0
+      phi_minus_rand = phi_minus / sum(phi_minus);
+      phi_plus = rand(1,length(list_Available_plus)); 
+      phi_plus_rand = phi_plus / sum(phi_plus);
+      
+      % firt assign minus
+      for node_j_index = 1:length(list_Available_minus)
+          node_j = list_Available_minus(node_j_index);
+          Phi_minus_pos = (node_i - 1)*(N_node+1)*N_task + node_j*N_task + t_index;
+          Phi_minus_RA_next(Phi_minus_pos) = phi_minus_rand(node_j_index);
+      end
+      % then assign plus
+      if node_i ~= t_dest
+         for node_j_index = 1:length(list_Available_plus)
+             node_j = list_Available_plus(node_j_index);
+             Phi_plus_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+             Phi_plus_RA_next(Phi_plus_pos) = phi_plus_rand(node_j_index);
+         end
+      end
+   end
+end
+end
+
+function [Phi_minus_LPR,Phi_plus_LPR] = Update_Phi_LPR(Adj,Task,InputRate,a_m,b_overhead,...
+                Delay_type,CompCost_type,Delay_para,CompCost_para,Capacity_Saturate_Factor,eps)
+% implementation of centrailized version of paper [3]
+% Step 1: 
+end
+
 function [Scale_Mat_minus,Scale_Mat_plus]  = ...
     Update_Scale_Matrix(Adj,Task,StepSize_GP,Phi_minus,Phi_plus,Is_Blocked_minus,Is_Blocked_plus, t_minus,t_plus,...
     Margin_link_minus,Margin_link_plus,Scale_Type,Capacity_Saturate_Factor,eps)
@@ -412,8 +658,8 @@ if strcmp(Scale_Type,'GP')
     for t_index = 1:N_task
         for node_i = 1:N_node
             % calculate diagonal elements for M-idm and M+idm
-            % first minus
             
+            % first minus
             % find the minimum marginal out-link
             min_margin_minus_pos = -1;
             min_margin_minus = Inf;
@@ -561,8 +807,8 @@ elseif strcmp(Scale_Type,'SGP')
                 Is_blocked_plus_pos = (node_i -1)*N_node*N_task + (node_j-1)*N_task + t_index;
                 M_plus_pos = (node_i -1)*N_node*N_task + (node_j-1)*N_task + t_index;
                 if Is_Blocked_plus(Is_blocked_plus_pos) == 0 % if j is in O(i)\Bidm+
-                    Scale_Mat_plus(M_plus_pos) = t_plus(t_plus_pos) / 2 ...
-                        * ( Aij_D0_plus(node_i,node_j) +  A_D0 * Unblocked_size_plus * h_plus(node_j));
+                    %Scale_Mat_plus(M_plus_pos) = t_plus(t_plus_pos) / 2 * ( Aij_D0_plus(node_i,node_j) +  A_D0 * Unblocked_size_plus * h_plus(node_j));
+                    Scale_Mat_plus(M_plus_pos) = t_plus(t_plus_pos) / 2 * ( 0*Aij_D0_plus(node_i,node_j) +  2 * Unblocked_size_plus * h_plus(node_j));
                 end
             end
             % then update M-, note: include j = 0
@@ -579,8 +825,8 @@ elseif strcmp(Scale_Type,'SGP')
                 else
                     Is_blocked_minus_pos = (node_i -1)*N_node*N_task + (node_j-1)*N_task + t_index;
                     if Is_Blocked_minus(Is_blocked_minus_pos) == 0 % if j is in O(i)\Bidm-
-                        Scale_Mat_minus(M_minus_pos) = t_minus(t_minus_pos) / 2 ...
-                            * ( Aij_D0_minus(node_i,node_j+1) +  A_D0 * Unblocked_size_minus * h_minus(node_j));
+                        %Scale_Mat_minus(M_minus_pos) = t_minus(t_minus_pos) / 2 * ( Aij_D0_minus(node_i,node_j+1) +  A_D0 * Unblocked_size_minus * h_minus(node_j));
+                        Scale_Mat_minus(M_minus_pos) = t_minus(t_minus_pos) / 2 * ( 0*Aij_D0_minus(node_i,node_j+1) +  2 * Unblocked_size_minus * h_minus(node_j));
                     end
                 end
                 
@@ -889,6 +1135,70 @@ end
 
 end
 
+function [Phi_minus_new,Phi_plus_new] = ...
+    Update_Phi_Local(Adj,Task,Phi_minus,Phi_plus,Margin_link_minus,Margin_link_plus,Scale_Mat_minus,Scale_Mat_plus,Is_Blocked_minus,Is_Blocked_plus,eps)
+% Similar to function 'Update_Phi_SGP', but keep phi- and update phi+
+options =  optimoptions(@quadprog,'Display','off');
+Offset_ratio = 0.01; % ratio of offset to the maximum entry
+Offset_fix = 0.01; % fixed offset
+
+N_node = length(Adj);
+N_task = size(Task,1);
+Phi_minus_new = Phi_minus;
+Phi_plus_new = zeros(size(Phi_plus));
+
+for t_index = 1:N_task
+    t_dest = Task(t_index,1);
+    for node_i = 1:N_node
+        % solve convex quadratic optimization:
+        % min  deltaT*(x-phit) + (x-phit)T*M/2*(x-phit), subject to xij >= 0 and sumj(j not blocked) xij = 1, sumj(j blocked)xij = 0
+        % method: x = quadprog(H,f,A,b,Aeq,beq,lb,ub): min_x 1/2*xT*H*x + fT*x, such that Ax<=b, Aeq*x=beq, lb<=x<=ub
+        % substitute: H = M, f = delta_i, and s.t. xj>=-phitj, sumj(j blocked) xj = - sumj(j blocked) phitj,
+        % sumj(j not blocked)xj = - sumj(j not blocked)phitj + 1
+        
+        % first plus
+        delta_plus_pos_list = ((node_i-1)*N_node*N_task+t_index) :N_task: ((node_i-1)*N_node*N_task+(N_node-1)*N_task+t_index);
+        delta_plus = Margin_link_plus(delta_plus_pos_list);
+        M_plus_pos_list = delta_plus_pos_list;
+        M_diag_plus = Scale_Mat_plus(M_plus_pos_list);
+        Diag_max = max(M_diag_plus);
+        Offset_plus = Diag_max * Offset_ratio + Offset_fix;
+        M_plus = diag(M_diag_plus + Offset_plus);
+        A_eq_plus = zeros(2,N_node); % firts row is blocked, second row unblocked
+        if t_dest == node_i
+            b_eq_plus = [0;0]; % if is the destination, no out flow
+        else
+            b_eq_plus = [0;1];
+        end
+        lb_plus = zeros(N_node,1);
+        for node_j = 1:N_node
+            Phi_plus_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+            Is_blocked_plus_pos = Phi_plus_pos;
+            lb_plus(node_j) = -1 * Phi_plus(Phi_plus_pos);
+            if Is_Blocked_plus(Is_blocked_plus_pos) == 1 % if no link ij or j is blocked
+                A_eq_plus(1,node_j) = 1;
+                b_eq_plus(1) = b_eq_plus(1) - Phi_plus(Phi_plus_pos);
+            else % if ij is feasible out-link
+                A_eq_plus(2,node_j) = 1;
+                b_eq_plus(2) = b_eq_plus(2) - Phi_plus(Phi_plus_pos);
+            end
+        end
+        [phi_plus_shift_idm,fval,exitflag_1] = quadprog(M_plus,delta_plus,[],[],A_eq_plus,b_eq_plus,lb_plus,[],[],options);
+        if (exitflag_1 <0)
+            error('ERROR: Quadratic progamming fail!\n')
+        end
+        phi_plus_new_idm = phi_plus_shift_idm - lb_plus; % phi_new = x + phi_old        
+        
+        % assign entries
+        for node_j = 1:N_node
+                Phi_plus_pos = (node_i -1)*N_node*N_task + (node_j-1)*N_task + t_index;
+                Phi_plus_new(Phi_plus_pos) = phi_plus_new_idm(node_j);
+        end
+    end
+end
+
+end
+
 function [Is_Blocked_minus,Is_Blocked_plus] = ...
     Update_Blocked(Adj,Task,Phi_minus,Phi_plus,Margin_node_minus,Margin_node_plus,eps)
 % Calculate the blocked nodes accroding to pD/pr and pD/pt+.
@@ -1099,7 +1409,7 @@ end
 end
 
 function [Is_Success,f_minus_init,f_plus_init,g_comp_init] = ...
-    Init_Generator_MILP(Adj,Task,InputRate,a_m,b,LinkCap,CompCap,eps)
+    Init_Generator_MILP(Adj,Task,InputRate,a_m,b,LinkCap,CompCap,Is_Initial_Local)
 % generate a vaild initial state by MILP on flow domain, with random
 % objective
 N_node = length(Adj);
@@ -1115,7 +1425,14 @@ length_x_MILP = N_node^2 * 2 * N_task + N_node * N_task * 2; % dimension of x ve
 
 % min fx, st. Ax<=b
 
-f_MILP = ones(1,length_x_MILP); % random objective
+if ~Is_Initial_Local
+    % if not requaired Initial Local, just random objective vector
+    f_MILP = ones(1,length_x_MILP); 
+else
+    % if required initial local, the objecteive is set to the following:
+    % Entries for f+ ,g and w are 0, for f- are 1. (minimize the data flow)
+    f_MILP = [ones(1,length_f_minus) zeros(1,length_x_MILP - length_f_minus)];
+end
 %f_MILP = [1 zeros(1,length_x_MILP-1)];
 %f_MILP = rand(1,length_x_MILP);
 
@@ -1213,7 +1530,7 @@ end
 
 end
 
-function [LinkFlow,CompFlow,t_minus,t_plus] = ...
+function [LinkFlow,CompFlow,t_minus,t_plus,Is_Loopfree] = ...
     Update_Flow(Adj,M,Task,a_m,b,InputRate,Phi_minus,Phi_plus,eps)
 % calculate flow Fij, Gim and Ti+- from routing variable phi
 % LinkFlow: matrix (N x N)
@@ -1224,6 +1541,7 @@ function [LinkFlow,CompFlow,t_minus,t_plus] = ...
 N_node = length(Adj);
 N_task = size(Task,1);
 MAX_PATH_LEN = N_node;
+Is_Loopfree = 1; % if the input phi is loop-free
 
 length_Phi_minus = N_node * (1+N_node) * N_task; % column vector odered as i ,j ,(d,m) and j can be 0
 length_Phi_plus = N_node * N_node * N_task; % column vector
@@ -1263,12 +1581,16 @@ for t_index = 1:N_task % for each task
     
     % calculate t-
     t_minus_t = InputRate(:,t_index); % t- for current task, column vector, vary every iteration, init with ridm
-    for iter = 1:MAX_PATH_LEN
+    for iter = 1:MAX_PATH_LEN+1
         t_minus_t_new = (t_minus_t' * Phi_minus_t)' + InputRate(:,t_index); % calculate new t using old t: t-j = sum_i t-i * phi_ij + rj
         if sum(abs(t_minus_t_new - t_minus_t)) <= eps % if not changing in one iteration
             break
         end
         t_minus_t = t_minus_t_new;
+        if iter == MAX_PATH_LEN +1 % if not end within N_node times, then there must be a loop
+            fprintf('Loop detected.\n');
+            Is_Loopfree = 0;
+        end
     end
     
     % calculate g
@@ -1276,12 +1598,16 @@ for t_index = 1:N_task % for each task
     
     % calculate t+
     t_plus_t = (a_m(t_m)* g_comp_t + b) .* (g_comp_t > eps); % init with extra flows am*g + b
-    for iter = 1:MAX_PATH_LEN
+    for iter = 1:MAX_PATH_LEN+1
         t_plus_t_new = (t_plus_t' * Phi_plus_t)' + (a_m(t_m)* g_comp_t + b) .* (g_comp_t > eps);
         if sum(abs(t_plus_t_new - t_plus_t)) <= eps
             break
         end
         t_plus_t = t_plus_t_new;
+        if iter == MAX_PATH_LEN +1 % if not end within N_node times, then there must be a loop
+            fprintf('Loop detected.\n');
+            Is_Loopfree = 0;
+        end
     end
     
     % assign entries
@@ -1364,10 +1690,70 @@ end
 end
 
 function Is_Valid = ...
-    Check_Phi_Valid(Adj,Task,InputRate,Phi_minus,Phi_plus)
+    Check_Phi_Valid(Adj,M,Task,InputRate,a_m,b,Phi_minus,Phi_plus, LinkCap, CompCap, eps)
 % check if given phi is valid:
 % 1: are flow conervation satisfied
 % 2: are + / - flow loop-free
+% 3: are capacity constraints satisfied
+
+Is_Valid = 1;
+% Step 1: all phi sums up to 1, except at destination sums up to 0
+N_node = length(Adj);
+N_task = size(Task,1);
+for t_index = 1:N_task
+   t_dest = Task(t_index,1); 
+   for node_i = 1:N_node
+      sum_phi_minus = 0;
+      sum_phi_plus = 0;
+      for node_j = [0 find(Adj(node_i,:))]
+         Phi_minus_pos = (node_i-1)*(1+N_node)*N_task + node_j*N_task + t_index;
+         sum_phi_minus = sum_phi_minus + Phi_minus(Phi_minus_pos);
+      end
+      for node_j = find(Adj(node_i,:))
+          Phi_plus_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+           sum_phi_plus = sum_phi_plus + Phi_plus(Phi_plus_pos);
+      end
+      if abs(sum_phi_minus - 1) >= eps % if sum of phi- is not one, unvalid
+          %fprintf('Validation Fail: Sum of phi- is not 1 at node %d, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+          Is_Valid = 0;
+          return
+      end
+      if node_i == t_dest
+         if abs(sum_phi_plus) >= eps % if is detinaton and sum of phi+ is not 0
+             %fprintf('Validation Fail: Sum of phi+ is not 0 at destination, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+             Is_Valid = 0;
+            return
+         end
+      else
+          if abs(sum_phi_plus - 1) >= eps % if is not dest and sum of phi+ is not 1
+              %fprintf('Validation Fail: Sum of phi+ is not 1 at node %d, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+              Is_Valid = 0;
+            return
+          end
+      end
+   end
+end
+
+% Step 2: compute the flow, while check loop-free
+[LinkFlow,CompFlow,t_minus,t_plus,Is_Loopfree] = ...
+    Update_Flow(Adj,M,Task,a_m,b,InputRate,Phi_minus,Phi_plus,eps);
+if Is_Loopfree == 0
+    %fprintf('Validation Fail: Contain loop.\n');
+    Is_Valid = 0;
+    return
+end
+
+% Step 3: check capacity
+if min(LinkCap - LinkFlow) <= -eps
+    %fprintf('Validation Fail: Exceed link capacity.\n');
+    Is_Valid = 0;
+    return
+end
+if min(CompCap - sum(CompFlow,2)) <= -eps
+    %fprintf('Validation Fail: Exceed computation capacity.\n');
+    Is_Valid = 0;
+    return
+end
 
 end
 
