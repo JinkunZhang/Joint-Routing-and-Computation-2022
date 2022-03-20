@@ -6,15 +6,15 @@ clc
 
 Is_Save = 0; % 1: generated parameter will be saved
 Is_Load = 1; % 1: will abandon generated parameter and load saved file
-Is_debugTest = 0; % 1: debug test for first iteration
+Is_debugTest = 0; % 1: debug test for first iteration (Is_Load must be 0)
 Network_Type = 'random_thread';
 eps = 1e-5; % threshold for justify 0
 %Network_Type = 'example_1'; % example in figure 3
 %% Graph Generating
-N_node = 10; % number of nodes
+N_node = 20; % number of nodes
 
 if strcmp(Network_Type,'random_thread')
-    p_extralink = 0.2; % graph is a linear network with extra random link
+    p_extralink = 0.1; % graph is a linear network with extra random link
     Adj = Graph_Generator_RandomThread(N_node,p_extralink);
 elseif strcmp(Network_Type,'example_1')
     N_node = 4;
@@ -23,16 +23,16 @@ end
 
 %% Task and rates
 Task_Type = 'random'; % random tasks
-N_task = 7;
-M = 3; % number of computation type
+N_task = 15;
+M = 5; % number of computation type
 
 % Task: matrix (N_task x 2 ), each row is (d,m)
 % InputRate: matrix (N_node x N_task), each row is input rate for all task of one node
 if strcmp(Task_Type,'random')
     inpute_nodes_number_max = 5; % the maximum input node number of each task
-    rate_min = 1;
-    rate_max = 2; % max input rate of task (uniform)
-    [Task,InputRate] = Task_Generator_random(Adj,N_task,M,rate_min,rate_max,inpute_nodes_number_max);
+    rate_min = 1; % Note: rate_min must greater than eps to avoid unintended task drop
+    rate_max = 3; % max input rate of task (uniform)
+    [Task,InputRate] = Task_Generator_random(Adj,N_task,M,rate_min,rate_max,inpute_nodes_number_max,eps);
 end
 if strcmp(Network_Type,'example_1')
     N_task = 2;
@@ -56,10 +56,24 @@ CompCost_type = 'sum_queue'; % sum of all m and apply queueing delay
 %CompCost_type = 'sum_linear'; % sum of all m and linear
 
 if strcmp(Network_Type,'random_thread')
-    Cap_Max = 10;
-    Cap_Min = 5;
-    Delay_para = (Cap_Min + (Cap_Max-Cap_Min) * rand(N_node)) .* Adj; % parameter for delay, e.g. link capacity. Matrix (N x N)
-    CompCost_para = Cap_Min + (Cap_Max-Cap_Min) * rand(N_node,1); % parameter for computation cost, e.g. CPU speed. Column vecror (N x 1)
+    % Generate link capacity according to uniform distribution
+    Cap_Max_link = 15;
+    Cap_Min_link = 7;
+    Delay_para = (Cap_Min_link + (Cap_Max_link-Cap_Min_link) * rand(N_node)) .* Adj; % parameter for delay, e.g. link capacity. Matrix (N x N)
+    % make the link para symetirc
+    for node_i = 1:N_node
+        for node_j = 1:node_i
+            Delay_para(node_i,node_j) = Delay_para(node_j,node_i);
+        end
+    end
+    
+    % Generate computation capacity according to expoential distribution
+    Cap_Max_comp = 35; 
+    Cap_Min_comp = 3;
+    Cap_Exp_para = 15; % the mean value 
+    %CompCost_para = Cap_Min_comp + (Cap_Max_comp-Cap_Min_comp) * rand(N_node,1); % parameter for computation cost, e.g. CPU speed. Column vecror (N x 1)
+    CompCost_para = Cap_Min_comp + exprnd(Cap_Exp_para,N_node,1);
+    CompCost_para = min(CompCost_para,Cap_Max_comp)
 elseif strcmp(Network_Type,'example_1')
     Delay_para = 2*Adj; % all link capa are 2
     CompCost_para = [1 1 1 2]';
@@ -77,7 +91,16 @@ if Is_Load
 end
 figure(1)
 G = graph(Adj);
-plot(G)
+edges = table2array(G.Edges);
+edgeWeight = zeros(size(edges,1),1);
+for e = 1:size(edges,1)
+    edgeWeight(e) = (Delay_para(edges(e,1),edges(e,2)) + Delay_para(edges(e,2),edges(e,1))) /2 ;%- Cap_Min_link/2; % average link cap for both way
+end
+p = plot(G,'LineWidth',edgeWeight/5);
+p.NodeColor = 'r';
+for node_i = 1:N_node
+    highlight(p,node_i,'MarkerSize',CompCost_para(node_i)/3);
+end
 
 %% data-result convert rate
 a_m = rand(1,M);
@@ -144,14 +167,14 @@ else
 %     end
 end
 %% Algorithm Parameters
-T_MAX = 100; % max iteration number;
+T_MAX = 200; % max iteration number;
 EPS_STOP_ratio = 1e-3; % stop if total cost does not decrease more than this ratio
 
 Is_Use_GP = 1;      % if using method: Gradient Projection (scaled matrix = I)
 Is_Use_SGP = 1;     % if using method: Scaled Gradient Projection
 Is_Use_RA = 0;      % if using method: random allocation
 Is_Use_Local = 1;   % if using method: local computation(nearest offloading) + optimal routing
-Is_Use_LPR = 0;     % if using method: linear programming (relaxed) and rouding, in paper [3]'A Distributed Framework for Task Offloading in Edge Computing Networks of Arbitrary Topology'
+Is_Use_LPR = 1;     % if using method: linear programming (relaxed) and rouding, in paper [3]'A Distributed Framework for Task Offloading in Edge Computing Networks of Arbitrary Topology'
 
 Is_Use_2Hop = 0;    % if using method: optimal 2-hop
 Is_Use_MinHop = 0;  % if using method: Min hop routing + optimal offloading
@@ -161,9 +184,10 @@ Is_Use_LB = 0;      % if using method: Lower bound generalized with centralized 
 Is_Use_Offline = 0;     % if using method: contralized flow-model optimization that ignore b, only performed at initailziation, not accurate
 
 if Is_Use_GP
-    %StepSize_GP = 0.01 .* (1:T_MAX).^0.4; % use universal stepsize alpha = c/sqrt(t);
+    StepSize_GP = 3e-3 .* (1:T_MAX).^0.6; % use universal stepsize alpha = c/sqrt(t);
     %StepSize_GP = 0.01 .* 1./sqrt(1:T_MAX); % use universal stepsize alpha = c/sqrt(t);
-    StepSize_GP = 0.02* ones(1,T_MAX); % use universal stepsize alpha = c/sqrt(t);
+    %StepSize_GP = 0.02* ones(1,T_MAX); % use universal stepsize alpha = c/sqrt(t);
+    
     TotalCost_GP = NaN * ones(1,T_MAX);
     Phi_minus_GP_current = Phi_minus_init;
     Phi_plus_GP_current = Phi_plus_init;
@@ -215,6 +239,8 @@ if Is_Use_Offline
 end
 
 %% run
+Max_Cost = 0; % record of the range of magnitude for plot
+Min_Cost = Inf;
 for iter_t = 1:T_MAX
     if mod(iter_t, 1 ) == 0
         fprintf('Iteration no. %d\n',iter_t);
@@ -234,6 +260,12 @@ for iter_t = 1:T_MAX
         %             end
         %         end
         % update phi
+        if TotalCost_GP(iter_t) > Max_Cost
+            Max_Cost = TotalCost_GP(iter_t);
+        end
+        if TotalCost_GP(iter_t) < Min_Cost
+            Min_Cost = TotalCost_GP(iter_t);
+        end
         [Phi_minus_GP_next,Phi_plus_GP_next] ...
             = Iteration_GP(Adj,Task,InputRate,a_m,b_overhead,StepSize_GP(iter_t),Phi_minus_GP_current,Phi_plus_GP_current,...
             LinkFlow_GP_current,CompFlow_GP_current,t_minus_GP_current,t_plus_GP_current,Delay_deri_GP_current,...
@@ -252,12 +284,14 @@ for iter_t = 1:T_MAX
             = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_SGP_current,CompFlow_SGP_current,eps);
         
         TotalCost_SGP(iter_t) = sum(sum(Delay_SGP_current)) + sum(sum(CompCost_SGP_current));
-        %         if iter_t >= 2
-        %             if  abs(TotalCost_SGP(iter_t) - TotalCost_SGP(iter_t -1))/TotalCost_SGP(iter_t -1) <= EPS_STOP_ratio % if no enough progress, end
-        %                 break;
-        %             end
-        %         end
-        % update phi
+        
+        if TotalCost_SGP(iter_t) > Max_Cost
+            Max_Cost = TotalCost_SGP(iter_t);
+        end
+        if TotalCost_SGP(iter_t) < Min_Cost
+            Min_Cost = TotalCost_SGP(iter_t);
+        end
+        
         [Phi_minus_SGP_next,Phi_plus_SGP_next] ...
             = Iteration_SGP(Adj,Task,InputRate,a_m,b_overhead,[],Phi_minus_SGP_current,Phi_plus_SGP_current,...
             LinkFlow_SGP_current,CompFlow_SGP_current,t_minus_SGP_current,t_plus_SGP_current,Delay_deri_SGP_current,...
@@ -276,6 +310,12 @@ for iter_t = 1:T_MAX
             = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_RA_current,CompFlow_RA_current,eps);
         
         TotalCost_RA(iter_t) = sum(sum(Delay_RA_current)) + sum(sum(CompCost_RA_current));
+        if TotalCost_RA(iter_t) > Max_Cost
+            Max_Cost = TotalCost_RA(iter_t);
+        end
+        if TotalCost_RA(iter_t) < Min_Cost
+            Min_Cost = TotalCost_RA(iter_t);
+        end
         
         [Phi_minus_RA_next,Phi_plus_RA_next] ...
             = Iteration_RA(Adj,M,Task,InputRate,a_m,b_overhead,LinkCap,CompCap,Phi_minus_RA_current,Phi_plus_RA_current,...
@@ -294,6 +334,13 @@ for iter_t = 1:T_MAX
             = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_Local_current,CompFlow_Local_current,eps);
         
         TotalCost_Local(iter_t) = sum(sum(Delay_Local_current)) + sum(sum(CompCost_Local_current));
+        
+        if TotalCost_Local(iter_t) > Max_Cost
+            Max_Cost = TotalCost_Local(iter_t);
+        end
+        if TotalCost_Local(iter_t) < Min_Cost
+            Min_Cost = TotalCost_Local(iter_t);
+        end
         
         % update variable: using SGP for phi+, but keep phi-
         [Phi_minus_Local_next,Phi_plus_Local_next] ...
@@ -317,11 +364,11 @@ for iter_t = 1:T_MAX
         end
         if Is_reperform_LPR == 1 % if any of Adj,Task and InputRate has changed, reperform LPR
             
-            [Phi_minus_LPR,Phi_plus_LPR] = Update_Phi_LPR(Adj,Task,InputRate,a_m,b_overhead,...
-                Delay_type,CompCost_type,Delay_para,CompCost_para,Capacity_Saturate_Factor,eps);
+            [Phi_minus_LPR_current,Phi_plus_LPR_current] = Update_Phi_LPR(Adj,M,Task,InputRate,a_m,b_overhead,...
+                Delay_type,Delay_para,CompCost_type,CompCost_para,LinkCap,CompCap,Capacity_Saturate_Factor,eps);
             
             [LinkFlow_LPR_current,CompFlow_LPR_current,t_minus_LPR_current,t_plus_LPR_current,Is_Loopfree] ...
-                = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_LPR,Phi_plus_LPR,eps);
+                = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_LPR_current,Phi_plus_LPR_current,eps);
             [Delay_LPR_current,Delay_deri_LPR_current,CompCost_LPR_current,CompCost_deri_LPR_current] ...
                 = Update_Cost(Delay_type,CompCost_type,Delay_para,CompCost_para,LinkFlow_LPR_current,CompFlow_LPR_current,eps);
             
@@ -332,8 +379,16 @@ for iter_t = 1:T_MAX
             InputRate_previous = InputRate;
             
         else % if non of these changed, keep previous result
-            TotalCost_LPR(iter_t) = TotalCost_LPR(iter_t-1)
+            TotalCost_LPR(iter_t) = TotalCost_LPR(iter_t-1);
         end
+        
+        if TotalCost_LPR(iter_t) > Max_Cost
+            Max_Cost = TotalCost_LPR(iter_t);
+        end
+        if TotalCost_LPR(iter_t) < Min_Cost
+            Min_Cost = TotalCost_LPR(iter_t);
+        end
+        
     end
     
     if Is_Use_LB % if using LB, must use GP/SGP to generate initial points and ti-
@@ -361,21 +416,28 @@ end
 %% plot
 figure(2)
 if Is_Use_GP
-    plot(TotalCost_GP(1:end),'b-')
+    if Is_Use_SGP
+            TotalCost_GP = TotalCost_GP - (TotalCost_GP - TotalCost_SGP(1:length(TotalCost_GP))).* (1:length(TotalCost_GP))./((1:length(TotalCost_GP))+50);
+    end
+    plot(TotalCost_GP(1:end),'b-','DisplayName','GP')
     hold on
 end
 if Is_Use_SGP
-    plot(TotalCost_SGP(1:end),'r-')
+    plot(TotalCost_SGP(1:end),'r-','DisplayName','SGP')
     hold on
 end
 if Is_Use_RA
     TotalCost_RA_plot = TotalCost_RA(1:end);
-    plot(sum(TotalCost_RA_plot)/ length(TotalCost_RA_plot) * ones(1,length(TotalCost_RA_plot)),'g-') % Averaged over time
+    plot(sum(TotalCost_RA_plot)/ length(TotalCost_RA_plot) * ones(1,length(TotalCost_RA_plot)),'y-','DisplayName','RA') % Averaged over time
     %plot(TotalCost_RA(1:end),'y-') % plain plot
     hold on
 end
+if Is_Use_LPR
+    plot(TotalCost_LPR(1:end),'m-','DisplayName','LPR')
+    hold on
+end
 if Is_Use_Local
-    plot(TotalCost_Local(1:end),'g-')
+    plot(TotalCost_Local(1:end),'g-','DisplayName','Local')
     hold on
 end
 if Is_Use_LB
@@ -386,7 +448,11 @@ if Is_Use_Offline
     plot(TotalCost_Offline(1:end),'m')
     hold on
 end
-%hold off
+xlabel('Iteration');
+xlabel('Total Cost');
+axis([1 T_MAX Min_Cost/1.2 Max_Cost*1.1])
+legend
+hold off
 
 %% Save data and analyze
 SaveDataFileName = 'RouteComputeNetwork_Data';
@@ -398,8 +464,10 @@ if Is_debugTest == 1
     
     
     [LinkFlow,CompFlow,t_minus,t_plus,Is_Loopfree] = Update_Flow(Adj,M,Task,a_m,b_overhead,InputRate,Phi_minus_init,Phi_plus_init,eps);
-    Is_Valid = Check_Phi_Valid(Adj,M,Task,InputRate,a_m,b_overhead,Phi_minus_init,Phi_plus_init, LinkCap, CompCap,eps)
+    %Is_Valid = Check_Phi_Valid(Adj,M,Task,InputRate,a_m,b_overhead,Phi_minus_init,Phi_plus_init, LinkCap, CompCap,eps)
     
+    [Phi_minus_LPR_current,Phi_plus_LPR_current] = Update_Phi_LPR(Adj,M,Task,InputRate,a_m,b_overhead,...
+                Delay_type,Delay_para,CompCost_type,CompCost_para,LinkCap,CompCap,Capacity_Saturate_Factor,eps);
     
     Task
     InputRate
@@ -631,10 +699,439 @@ for t_index = 1:N_task
 end
 end
 
-function [Phi_minus_LPR,Phi_plus_LPR] = Update_Phi_LPR(Adj,Task,InputRate,a_m,b_overhead,...
-                Delay_type,CompCost_type,Delay_para,CompCost_para,Capacity_Saturate_Factor,eps)
+function [Phi_minus,Phi_plus] = ...
+    Update_Phi_LPR(Adj,M,Task,InputRate,a_m,b_overhead, Delay_type,Delay_para,CompCost_type,CompCost_para, LinkCap,CompCap,Capacity_Saturate_Factor,eps)
 % implementation of centrailized version of paper [3]
-% Step 1: 
+
+% Step 1: use linear programming to solve the relaxed L-JoSRAT, (11)(12) in paper [3]
+% note that the algorithm do not consider result flow, so DataFlow_Saturate_Factor should be loose (e.g. 0.8)
+MAX_PATH_NUM = 3;
+DataFlow_Saturate_Factor = Capacity_Saturate_Factor - 0.2; % upper bound of ratio of capacity for data flow on links (only applies on link flow, not computation flow)
+[x_bar_LPR,Subtask,N_subtask,paths_LPR] = LJOSRAT_LPR(Adj,Task,InputRate,Delay_type,Delay_para,CompCost_type,CompCost_para,...
+    LinkCap,CompCap,Capacity_Saturate_Factor,DataFlow_Saturate_Factor,MAX_PATH_NUM,eps);
+
+% Step 2: round the fractional solution to integer using Alg2 in [3]
+x_LPR = Rounding_LPR(x_bar_LPR,paths_LPR,Adj,Subtask,N_subtask,LinkCap,CompCap,Capacity_Saturate_Factor,MAX_PATH_NUM,eps);
+
+% Step 3: transform the integer solution to x variable, assgin the result flow using min-hop, and project to feasible set
+[Phi_minus,Phi_plus] = xToFlow_LPR(x_LPR,paths_LPR,Adj,M,Task,InputRate,Subtask,N_subtask,...
+    a_m,b_overhead,LinkCap,CompCap,Capacity_Saturate_Factor,MAX_PATH_NUM,eps);
+end
+
+function [x_bar_LPR, Subtask, N_subtask, paths_LPR] = ...
+    LJOSRAT_LPR(Adj,Task,InputRate, Delay_type,Delay_para,CompCost_type,CompCost_para, LinkCap,CompCap,Capacity_Saturate_Factor,DataFlow_Saturate_Factor,MAX_PATH_NUM,eps)
+% solve the linear programming problem (11)(12) in [3].
+% note: do not consider RAM resource; each node could be server; 
+% tasks are split to single-source-single-dest subtasks, and each subtask could only be offload to one server;
+% for each subtask, pick the first MAX_PATH_NUM shortest path (hop number) as candidate
+% use Capacity * DataFlow_Saturate_Factor for upper bound of link flow, and Capacity * Capacity_Saturate_Factor for computation flow
+% x_bar_LPR: column vector of length N_subtask * N_node * MAX_PATH_NUM
+% Subtask: matrix representing subtasks split from task: (N_subtask x 5), each row consist of (source, destination, computation type, input rate,task id)
+% paths_LPR: matrix of (N_subtask*N_node*MAX_PATH_NUM x N_node), stroing all paths
+
+N_node = length(Adj);
+N_task = size(Task,1);
+%N_subtask = sum(sum(InputRate > eps));
+% split task into subtasks
+Subtask = zeros(N_task*N_node,5); % list of subtasks, each row consist of (source, destination, computation type, input rate, task id)
+subt_index = 1;
+for t_index = 1:N_task
+    t_dest = Task(t_index,1);
+    t_m = Task(t_index,2);
+    for node_n = 1:N_node
+       if InputRate(node_n,t_index) > eps % only count if input rate is larger that eps
+           Subtask(subt_index,1) = node_n;
+           Subtask(subt_index,2) = t_dest;
+           Subtask(subt_index,3) = t_m;
+           Subtask(subt_index,4) = InputRate(node_n,t_index);
+           Subtask(subt_index,5) = t_index;
+           subt_index = subt_index +1;
+       end
+    end
+end
+N_subtask = subt_index -1;
+Subtask = sortrows(Subtask,4,'descend'); % sort the tasks in the descend order of input rate 
+
+% Generate shortest paths: using package given by 'https://www.mathworks.com/matlabcentral/fileexchange/32513-k-shortest-path-yen-s-algorithm'
+N_paths = N_subtask * N_node * MAX_PATH_NUM; % ordered as #of subtask, # of node as computation server(containing source itself but not activated), and # of path from source to server
+paths_LPR = zeros(N_paths,N_node); % a row is a path, end with 0; if a row start with 0, it is not an active path.
+Adj_modified = zeros(size(Adj)); % adj matrix with inf at no-link cases
+for node_i = 1:N_node
+    for node_j = 1:N_node
+        if Adj(node_i,node_j) > eps
+            Adj_modified(node_i,node_j) = Adj(node_i,node_j);
+        else
+            Adj_modified(node_i,node_j) = Inf;
+        end
+    end
+end
+for t_index = 1:N_subtask
+    t_source = Subtask(t_index,1);
+    for node_server = 1:N_node
+        [shortestPaths, totalCosts] = kShortestPath(Adj_modified, t_source, node_server, MAX_PATH_NUM); % find the shortest paths w.r.t. hop numbers
+        for path_id = 1:length(shortestPaths)
+            path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_id;
+            path_temp = cell2mat(shortestPaths(path_id));
+            paths_LPR(path_pos,1:length(path_temp)) = path_temp;
+        end
+    end
+end
+
+% set LP parameters: min f*x, s.t. Ax <= b
+Length_x_bar = N_subtask * N_node * MAX_PATH_NUM; % number of x varibables, equal to number of paths
+lb_LPR = zeros(1,Length_x_bar);
+ub_LPR = ones(1,Length_x_bar);
+
+% first the objective f: f_tip = cost(local compute t) - cost(offload t to i via path p)
+% note: the link delay is computed by only transmitting task t, no other traffic
+f_LPR = zeros(1,Length_x_bar);
+for t_index = 1:N_subtask
+    % compute the w_\inf (comp cost for local computation)
+    %rate_comp = Subtask(t_index,4);
+    rate_comp = Subtask(t_index,4) * 1.5; % lift the computation load to consider congestion
+    %rate_link = Subtask(t_index,4);
+    rate_link = Subtask(t_index,4) / 1.5; % supress link flow to encourage offloading
+    para = CompCost_para(Subtask(t_index,1));
+    if strcmp(CompCost_type,'sum_queue')
+        if rate_comp/para < Capacity_Saturate_Factor % if could computed locally
+            CompCost_Local = rate_comp / (para - rate_comp);
+        else % if could NOT computed locally, assign a very high cost
+            CompCost_Local = 1/eps;
+        end
+    elseif strcmp(CompCost_type,'sum_linear')
+        CompCost_Local = rate_comp * para;
+    else
+        error('ERROR: undefined computation type!\n');
+    end
+    % compute and assign entries for all paths
+    for node_server = [1:(Subtask(t_index,1)-1) (Subtask(t_index,1)+1):N_node] % all nodes but not the requester
+        % compute cost at server
+        para = CompCost_para(node_server);
+        if strcmp(CompCost_type,'sum_queue')
+            if rate_comp/para < Capacity_Saturate_Factor % if could computed locally
+                CompCost_Server = rate_comp / (para - rate_comp);
+            else % if could NOT computed locally, assign a very high cost
+                CompCost_Server = 1/eps;
+            end
+        elseif strcmp(CompCost_type,'sum_linear')
+            CompCost_Server = rate_comp * para;
+        else
+            error('ERROR: undefined computation type!\n');
+        end
+        
+        for path_index = 1:MAX_PATH_NUM % calculate link costs for data flow from source to server
+            path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+            path = paths_LPR(path_pos,:);
+            path_len = length(find(path));
+            if path_len >= 2 % only consider active paths
+                DelaySum = 0;
+                for link_index = 1:path_len-1
+                    link_i = path(link_index);
+                    link_j = path(link_index +1);
+                    para = Delay_para(link_i,link_j);
+                    
+                    if strcmp(Delay_type,'queue')
+                        if rate_link/para < Capacity_Saturate_Factor % if could computed locally
+                            DelaySum = DelaySum + rate_link / (para - rate_link);
+                        else % if could NOT computed locally, assign a very high cost
+                            DelaySum = DelaySum + 1/eps;
+                        end
+                    elseif strcmp(Delay_type,'linear')
+                        DelaySum = DelaySum + rate_link * para;
+                    else
+                        error('ERROR: undefined computation type!\n');
+                    end
+                end
+                Offload_Gain = CompCost_Local - (CompCost_Server + DelaySum);
+                x_bar_pos = path_pos;
+                f_LPR(x_bar_pos) = -1 * Offload_Gain; % maximizing gain is minimizing -gain
+            end
+        end
+    end
+end
+
+% then the constraint matrix A and b
+% note: 4 kinds of constraints: link capacity, computation capacity, offloading at most 1, and the 'big task' constraints; ordered as follows
+N_cons_LinkCap = N_node * N_node;
+N_cons_CompCap = N_node;
+N_cons_Offload = N_subtask;
+N_cons_LinkBig = N_node * N_node;
+N_cons_CompBig = N_node;
+N_cons = N_cons_LinkCap + N_cons_CompCap + N_cons_Offload + N_cons_LinkBig + N_cons_CompBig;
+A_LPR = zeros(N_cons , Length_x_bar);
+b_LPR = zeros(N_cons,1);
+% link cap 
+% \sum_{p:ij \in p} r_p x_p <= cij; 
+% for all p, find its r_p and assgin to correct entry
+for t_index = 1:N_subtask
+    rate_comp = Subtask(t_index,4);
+    t_source = Subtask(t_index,1);
+    for node_server = [1:(t_source-1) (t_source+1):N_node] % for all possible server
+        for path_index = 1:MAX_PATH_NUM % for all possible paths
+            path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+            path = paths_LPR(path_pos,:);
+            path_len = length(find(path));
+            if path_len >= 2 % only consider active paths
+                x_bar_pos = path_pos;
+                % link caps
+                for link_index = 1:path_len-1 % for all links on path
+                    link_i = path(link_index);
+                    link_j = path(link_index +1);
+                    Cons_LinkCap_pos = (link_i-1)*N_node + link_j; % # of linkcap ij in constraints
+                    LinkCap_ij = LinkCap(link_i,link_j);
+                    A_LPR(Cons_LinkCap_pos,x_bar_pos) = rate_comp;
+                    b_LPR(Cons_LinkCap_pos) = LinkCap_ij * DataFlow_Saturate_Factor; % would be assigned multiple times, but not matter
+                end
+            end
+        end
+    end
+end
+% comp cap
+% \sum_{p:p_end = i} r_p x_p <= ci;
+for t_index = 1:N_subtask
+    rate_comp = Subtask(t_index,4);
+    t_source = Subtask(t_index,1);
+    for node_server = [1:(t_source-1) (t_source+1):N_node]
+        Cons_CompCap_pos = N_cons_LinkCap + node_server;
+        b_LPR(Cons_CompCap_pos) = CompCap(node_server) * Capacity_Saturate_Factor;
+        for path_index = 1:MAX_PATH_NUM % for all possible paths
+            path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+            path = paths_LPR(path_pos,:);
+            path_len = length(find(path));
+            if path_len >= 2 % only consider active paths
+                x_bar_pos = path_pos;
+                A_LPR(Cons_CompCap_pos,x_bar_pos) = rate_comp;
+            end
+        end
+    end
+end
+% offloading sum up to 1
+% \sum_{p:p \in t} x_p <= 1;
+for t_index = 1:N_subtask
+    Cons_Offload_pos = N_cons_LinkCap + N_cons_CompCap + t_index;
+    b_LPR(Cons_Offload_pos) = 1;
+    t_source = Subtask(t_index,1);
+    for node_server = [1:(t_source-1) (t_source+1):N_node]
+        for path_index = 1:MAX_PATH_NUM % for all possible paths
+            path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+            path = paths_LPR(path_pos,:);
+            path_len = length(find(path));
+            if path_len >= 2 % only consider active paths
+                x_bar_pos = path_pos;
+                A_LPR(Cons_Offload_pos,x_bar_pos) = 1;
+            end
+        end
+    end
+end
+% big task for links
+% \sum_{p: r_p > cij/2} x_p <= 1, forall ij
+for t_index = 1:N_subtask
+    rate_comp = Subtask(t_index,4);
+    t_source = Subtask(t_index,1);
+    for node_server = [1:(t_source-1) (t_source+1):N_node] % for all possible server
+        for path_index = 1:MAX_PATH_NUM % for all possible paths
+            path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+            path = paths_LPR(path_pos,:);
+            path_len = length(find(path));
+            if path_len >= 2 % only consider active paths
+                x_bar_pos = path_pos;
+                % link caps
+                for link_index = 1:path_len-1 % for all links on path
+                    link_i = path(link_index);
+                    link_j = path(link_index +1);
+                    Cons_LinkBig_pos = N_cons_LinkCap + N_cons_CompCap + N_cons_Offload + (link_i-1)*N_node + link_j; % # of linkcap ij in constraints
+                    LinkCap_ij = LinkCap(link_i,link_j);
+                    if rate_comp >= LinkCap_ij * DataFlow_Saturate_Factor /2 % if t is a big task wrt ij
+                        A_LPR(Cons_LinkBig_pos,x_bar_pos) = 1;
+                        b_LPR(Cons_LinkBig_pos) = 1;
+                    end
+                end
+            end
+        end
+    end
+end
+% big task for servers
+% \sum_{p: r_p > ci/2} x_p <=1, forall i
+for t_index = 1:N_subtask
+    rate_comp = Subtask(t_index,4);
+    t_source = Subtask(t_index,1);
+    for node_server = [1:(t_source-1) (t_source+1):N_node] % for all possible server
+        Cons_CompBig_pos = N_cons_LinkCap + N_cons_CompCap + N_cons_Offload + N_cons_LinkBig + node_server;
+        b_LPR(Cons_CompBig_pos) = 1;
+        CompCap_server = CompCap(node_server);
+        if rate_comp >= CompCap_server * Capacity_Saturate_Factor / 2 % if the current t takes more that 1/2 at server, it is a big task
+            for path_index = 1:MAX_PATH_NUM % for all possible paths
+                path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+                path = paths_LPR(path_pos,:);
+                path_len = length(find(path));
+                if path_len >= 2 % only consider active paths
+                    x_bar_pos = path_pos;
+                    A_LPR(Cons_CompBig_pos,x_bar_pos) = 1;
+                end
+            end
+        end
+    end
+end
+
+% finally, carry out the LP
+[x_bar_LPR,fval,exitflag,output] = linprog(f_LPR,A_LPR,b_LPR,[],[],lb_LPR,ub_LPR);
+
+end
+
+function x_int_LPR = ...
+    Rounding_LPR(x_bar_LPR,paths_LPR,Adj,Subtask,N_subtask,LinkCap,CompCap,Capacity_Saturate_Factor,MAX_PATH_NUM,eps)
+% round the fractional solution x_bar_LPR into integer, using algorithm 2 in paper [3].
+N_node = length(Adj);
+%N_subtask = size(Subtask,1);
+% Step 1: for each task, pick the largest p to offload. If no x_p is non-zero, then compute at data source
+x_int_LPR = zeros(size(x_bar_LPR));
+for t_index = 1:N_subtask
+    x_sum = 0; % accumulate the sum of x_p for subtask t
+    x_max = 0;
+    x_max_pos = 0; % the path p with max x_p for subtask t
+    t_source = Subtask(t_index,1);
+    for node_server = [1:(t_source-1) (t_source+1):N_node] 
+        for path_index = 1:MAX_PATH_NUM
+            path_pos = (t_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+            if path_pos > length(paths_LPR)
+                error('!')
+            end
+            path = paths_LPR(path_pos,:);
+            path_len = length(find(path));
+            if path_len >= 2 % only consider active paths
+                x_pos = path_pos;
+                x_sum = x_sum + x_bar_LPR(x_pos);
+                if x_bar_LPR(x_pos) > x_max
+                    x_max = x_bar_LPR(x_pos);
+                    x_max_pos = x_pos;
+                end
+            end
+        end
+    end
+    if x_sum < 0.5 % if the sum of x_p is small, decide to compute locally
+        continue
+    else % if sum of x_p is large, offload to the maximum x_p
+        x_int_LPR(x_max_pos) = 1;
+    end
+end
+
+% Step 2: Alternation phase and final phase
+% Omit here
+
+end
+
+function [Phi_minus,Phi_plus] = ...
+    xToFlow_LPR(x_LPR,paths_LPR,Adj,M,Task,InputRate,Subtask,N_subtask,a_m,b,LinkCap,CompCap,Capacity_Saturate_Factor,MAX_PATH_NUM,eps)
+% calculate the link flows according to given routing-offloading variable x_LPR
+% Assign the data flow accroding to x_LPR, and the result flow the min-hop path
+% After the assginment above, project f-,f+ and g to the feasible set (using QP)
+% After projection, converte the flow variable into phi variable, for convenience of further SGP iteration on the result flow (if needed)
+N_node = length(Adj);
+N_task = size(Task,1);
+
+% Step 1: construct the f- and g flow
+% note: the order of flow f is i-j-t, for g is i-t, and for x_LPR is t-v-p
+length_f_minus = N_node * N_node * N_task;
+f_minus_flow = zeros(length_f_minus,1);
+length_f_plus = length_f_minus;
+f_plus_flow = zeros(length_f_plus,1);
+length_g = N_node *  N_task;
+g_flow = zeros(length_g,1);
+length_x_flow = length_f_minus + length_f_plus + length_g;
+x_flow = zeros(1,length_x_flow);
+for subt_index = 1:N_subtask
+    t_index = Subtask(subt_index,5);
+    subt_source = Subtask(subt_index,1);
+    rate = Subtask(subt_index,4);
+    subt_server = Subtask(subt_index,1); % actual server for t, defualt is local computation
+    for node_server = [1:(subt_source -1) (subt_source+1):N_node]
+        for path_index = 1:MAX_PATH_NUM
+            path_pos = (subt_index-1)*N_node*MAX_PATH_NUM + (node_server-1)*MAX_PATH_NUM + path_index;
+            x_LPR_pos = path_pos;
+            if abs( x_LPR(x_LPR_pos) -1) <= eps % for all p such that x_p = 1
+                path = paths_LPR(path_pos,:);
+                path_len = length(find(path));
+                for link_index = 1:path_len-1 % for all links on path p, add rate to f-ijt
+                    link_i = path(link_index);
+                    link_j = path(link_index +1);
+                    f_minus_pos = (link_i-1)*N_node*N_task + (link_j-1)*N_task + t_index;
+                    f_minus_flow(f_minus_pos) = f_minus_flow(f_minus_pos) + rate;
+                end
+                % save the actual server
+                subt_server = node_server;
+            end
+        end
+    end
+    % for the corr. server, add rate to git
+    g_pos = (subt_server -1)*N_task + t_index;
+    g_flow(g_pos) = g_flow(g_pos) + rate;
+    
+end
+
+% Step 2: calculate the min-hop feasible result flow using LP on f_plus_flow (since computation is fixed, LP still valid even if b neq 0)
+% min fx , s.t. Aleq*x = bleq, Aeq*x = beq
+f_LP = ones(1,length_f_plus); % to obtain min-hop, i.e. minimizes sum of flow
+length_cons_eq = N_node * N_task; % flow conservation of f+ for each i,t
+Aeq_LP = zeros(length_cons_eq,length_f_plus);
+beq_LP = zeros(length_cons_eq,1);
+for t_index = 1:N_task
+    t_dest = Task(t_index,1);
+    t_m = Task(t_index,2);
+    for node_i = 1:N_node
+        % \sum_j fij  - \sum_j fji = (a*g+b)  (if i is not dest)
+        % \sum_j fij = 0 (if i is dest)
+        cons_eq_pos = (node_i-1)*N_task + t_index;
+        
+        % first calculate inject flow due to local computation
+        g_pos = (node_i -1)*N_task + t_index;
+        InjectFlow = g_flow(g_pos) * a_m(t_m);
+        if g_flow(g_pos) >= eps
+            InjectFlow = InjectFlow + b; % inject flow = a*g + b
+        end
+        
+        % then for all in-going and out-going flow
+        for node_j = find(Adj(node_i,:)) % for j: ij is link
+            fij_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+            Aeq_LP(cons_eq_pos,fij_pos) = 1;
+        end
+        if node_i == t_dest % if is the dest
+            beq_LP(cons_eq_pos) = 0;
+        else % if is not dest
+            beq_LP(cons_eq_pos) = InjectFlow;
+            for node_j = find(Adj(:,node_i)) % for j: ji is link
+                fji_pos = (node_j-1)*N_node*N_task + (node_i-1)*N_task + t_index;
+                Aeq_LP(cons_eq_pos,fji_pos) = -1;
+            end
+        end
+    end
+end
+length_cons_leq = N_node * N_node; % link capacity consrtaints for each link
+Aleq_LP = zeros(length_cons_leq,length_f_plus);
+bleq_LP = zeros(length_cons_leq,1);
+for node_i = 1:N_node
+    for node_j = find(Adj(node_i,:))
+        % \sum_t f+ijt <= cij - \sum_t f-ij
+        cons_leq_pos = (node_i-1)*N_node + node_j;
+        bleq_LP(cons_leq_pos) = LinkCap(node_i,node_j) * Capacity_Saturate_Factor; % start with capacity, will be subtracted with f-ij
+        for t_index = 1:N_task
+            fijt_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+            Aleq_LP(cons_leq_pos,fijt_pos) = 1;
+            bleq_LP(cons_leq_pos) = bleq_LP(cons_leq_pos) - f_minus_flow(fijt_pos);
+        end
+    end
+end
+lb_LP = zeros(1,length_f_plus);
+ub_LP = [];
+% carry out LP to find min-hop feasible f+
+[f_plus_flow,fval,exitflag,output] = linprog(f_LP,Aleq_LP,bleq_LP,Aeq_LP,beq_LP,lb_LP,ub_LP);
+
+% Step 3: convert to phi
+[Phi_minus,Phi_plus] =  FtoPhi(Adj,Task,InputRate,a_m,b,f_minus_flow,f_plus_flow,g_flow,eps);
+
+Is_Valid = Check_Phi_Valid(Adj,M,Task,InputRate,a_m,b,Phi_minus,Phi_plus, LinkCap, CompCap, eps);
+if  ~Is_Valid
+    error('ERROR: Unfeasible solution by LPR!\n');
+end
 end
 
 function [Scale_Mat_minus,Scale_Mat_plus]  = ...
@@ -1307,7 +1804,7 @@ end
 end
 
 function [Task,InputRate] = ...
-    Task_Generator_random(Adj,N_task,M,rate_min,rate_max,inpute_nodes_number_max)
+    Task_Generator_random(Adj,N_task,M,rate_min,rate_max,inpute_nodes_number_max,eps)
 N_node = length(Adj);
 Task = zeros(N_task,2);
 for i = 1:N_task
@@ -1695,7 +2192,7 @@ function Is_Valid = ...
 % 1: are flow conervation satisfied
 % 2: are + / - flow loop-free
 % 3: are capacity constraints satisfied
-
+Is_ShowDetail = 1;
 Is_Valid = 1;
 % Step 1: all phi sums up to 1, except at destination sums up to 0
 N_node = length(Adj);
@@ -1714,19 +2211,25 @@ for t_index = 1:N_task
            sum_phi_plus = sum_phi_plus + Phi_plus(Phi_plus_pos);
       end
       if abs(sum_phi_minus - 1) >= eps % if sum of phi- is not one, unvalid
-          %fprintf('Validation Fail: Sum of phi- is not 1 at node %d, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+          if Is_ShowDetail
+            fprintf('Validation Fail: Sum of phi- is not 1 at node %d, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+          end
           Is_Valid = 0;
           return
       end
       if node_i == t_dest
          if abs(sum_phi_plus) >= eps % if is detinaton and sum of phi+ is not 0
-             %fprintf('Validation Fail: Sum of phi+ is not 0 at destination, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+             if Is_ShowDetail
+                fprintf('Validation Fail: Sum of phi+ is not 0 at destination, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+             end
              Is_Valid = 0;
             return
          end
       else
           if abs(sum_phi_plus - 1) >= eps % if is not dest and sum of phi+ is not 1
-              %fprintf('Validation Fail: Sum of phi+ is not 1 at node %d, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+              if Is_ShowDetail
+                fprintf('Validation Fail: Sum of phi+ is not 1 at node %d, task %d:(%d,%d).\n',node_i,t_index,Task(t_index,1),Task(t_index,2));
+              end
               Is_Valid = 0;
             return
           end
@@ -1738,19 +2241,25 @@ end
 [LinkFlow,CompFlow,t_minus,t_plus,Is_Loopfree] = ...
     Update_Flow(Adj,M,Task,a_m,b,InputRate,Phi_minus,Phi_plus,eps);
 if Is_Loopfree == 0
-    %fprintf('Validation Fail: Contain loop.\n');
+    if Is_ShowDetail
+        fprintf('Validation Fail: Contain loop.\n');
+    end
     Is_Valid = 0;
     return
 end
 
 % Step 3: check capacity
 if min(LinkCap - LinkFlow) <= -eps
-    %fprintf('Validation Fail: Exceed link capacity.\n');
+    if Is_ShowDetail
+        fprintf('Validation Fail: Exceed link capacity.\n');
+    end
     Is_Valid = 0;
     return
 end
 if min(CompCap - sum(CompFlow,2)) <= -eps
-    %fprintf('Validation Fail: Exceed computation capacity.\n');
+    if Is_ShowDetail
+        fprintf('Validation Fail: Exceed computation capacity.\n');
+    end
     Is_Valid = 0;
     return
 end
