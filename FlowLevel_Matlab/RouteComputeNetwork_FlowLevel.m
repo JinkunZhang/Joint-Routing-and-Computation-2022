@@ -4,12 +4,12 @@ clear all
 close all
 clc
 
-Is_Save = 0; % 1: generated parameter will be saved
-Is_Load = 1; % 1: will abandon generated parameter and load saved file
+Is_Save = 1; % 1: generated parameter will be saved
+Is_Load = 0; % 1: will abandon generated parameter and load saved file
 Is_debugTest = 0; % 1: debug test for first iteration (Is_Load must be 0)
 Mandate_am = 0; % 1: use loaded or generated a_m; otherwise, mandate all a_m to this value
 
-Network_Type = 'random_thread';
+Network_Type = 'small_world';
 % random_thread: (connected-ER)linear network with extra links with given probability
 % balance_tree: complete binary tree
 % abilene: Abilene topology, 11 nodes (DECO version)
@@ -52,8 +52,8 @@ end
 N_node = length(Adj);
 %% Task and rates
 Task_Type = 'random'; % random tasks
-N_task = 15;
-inpute_nodes_number_max = 5;   % the maximum input node number of each task
+N_task = 20;
+inpute_nodes_number_max = 10;   % the maximum input node number of each task
 M = 5; % number of computation type
 
 % Task: matrix (N_task x 2 ), each row is (d,m)
@@ -92,7 +92,7 @@ if strcmp(Network_Type,'example_1')
 
 else 
     % Generate link capacity according to uniform distribution
-    Cap_Max_link = 10;
+    Cap_Max_link = 15;
     Cap_Min_link = 15;
     Delay_para = (Cap_Min_link + (Cap_Max_link-Cap_Min_link) * rand(N_node)) .* Adj; % parameter for delay, e.g. link capacity. Matrix (N x N)
     % make the link para symetirc
@@ -104,8 +104,8 @@ else
     
     % Generate computation capacity according to expoential distribution
     Cap_Max_comp = 35;
-    Cap_Min_comp = 5;
-    Cap_Exp_para = 15; % the mean value
+    Cap_Min_comp = 10;
+    Cap_Exp_para = 20; % the mean value
     if strcmp(CompCost_type,'sum_linear')
     CompCost_para = Cap_Min_comp + (Cap_Max_comp-Cap_Min_comp) * rand(N_node,1); % parameter for computation cost, e.g. CPU speed. Column vecror (N x 1)
     elseif strcmp(CompCost_type,'sum_queue')
@@ -178,7 +178,7 @@ else
     end
     if strcmp(Initial_Type,'MILP') || strcmp(Initial_Type,'MILP_RA')
         Capacity_Saturate_Factor = 0.9; % the maximum allowed fraction of capacity
-        [Is_Success,f_minus_init,f_plus_init,g_comp_init] = Init_Generator_MILP(Adj,Task,InputRate,a_m,b_overhead,...
+        [Is_Success,f_minus_init,f_plus_init,g_comp_init] = Init_Generator2_MILP(Adj,Task,InputRate,a_m,b_overhead,...
             Delay_type,Delay_para,CompCost_type,CompCost_para,LinkCap*Capacity_Saturate_Factor,CompCap*Capacity_Saturate_Factor,Is_Initial_LCOR);
         if ~Is_Success
             error('ERROR: No Feasible Initial State!  Will abort.\n');
@@ -516,7 +516,7 @@ for iter_t = 1:T_MAX
                 % if is the first iteration, use the initial state
                 % if is not the first iteration, re-compute an initial state
                 fprintf('SPOO: re-init at iteration %d.\n',iter_t)
-                [Is_Success,f_minus_init,f_plus_init,g_comp_init] = Init_Generator_MILP(Adj,Task,InputRate,a_m,b_overhead,...
+                [Is_Success,f_minus_init,f_plus_init,g_comp_init] = Init_Generator2_MILP(Adj,Task,InputRate,a_m,b_overhead,...
                     Delay_type,Delay_para,CompCost_type,CompCost_para,LinkCap*Capacity_Saturate_Factor,CompCap*Capacity_Saturate_Factor,Is_Initial_LCOR);
                 if ~Is_Success
                     error('ERROR: No Feasible Initial State!  Will abort.\n');
@@ -931,7 +931,7 @@ function [x_bar_LPR, Subtask, N_subtask, paths_LPR] = ...
 % x_bar_LPR: column vector of length N_subtask * N_node * MAX_PATH_NUM
 % Subtask: matrix representing subtasks split from task: (N_subtask x 5), each row consist of (source, destination, computation type, input rate,task id)
 % paths_LPR: matrix of (N_subtask*N_node*MAX_PATH_NUM x N_node), stroing all paths
-
+fprintf('LJOSRAT_LPR: begin solving LPR...\n');
 N_node = length(Adj);
 N_task = size(Task,1);
 %N_subtask = sum(sum(InputRate > eps));
@@ -1178,7 +1178,7 @@ end
 
 % finally, carry out the LP
 [x_bar_LPR,fval,exitflag,output] = linprog(f_LPR,A_LPR,b_LPR,[],[],lb_LPR,ub_LPR);
-
+fprintf('LJOSRAT_LPR: LPR finished\n');
 end
 
 function x_int_LPR = ...
@@ -1349,40 +1349,40 @@ length_block_vec = N_node * N_node *N_task;
 Is_Blocked_minus = ones(length_block_vec,1);
 Is_Blocked_plus = ones(length_block_vec,1);
 
-% for node_i = 1:N_node
-%     for node_j = find(Adj(node_i,:))
-%         % for all links ij, note that the un-link ij is already blocked by initializing to 1.
-%         for t_index = 1:N_task
-%             phi_minus_pos = (node_i-1)*(N_node+1)*N_task + node_j*N_task + t_index;
-%             phi_plus_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
-%             block_vec_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
-%             if Phi_minus(phi_minus_pos) >= eps % if there is non-zeros phi, unblock
-%                 Is_Blocked_minus(block_vec_pos) = 0;
-%             end
-%             if Phi_plus(phi_plus_pos) >= eps
-%                 Is_Blocked_plus(block_vec_pos) = 0;
-%             end
-%         end
-%     end
-% end
-
-% calculate the shortest path to the destination of each task
-G = graph(Adj);
-for t_index = 1:N_task
-    t_dest = Task(t_index,1);
-    TR = shortestpathtree(G,'all',t_dest);
-    Adj_TR = adjacency(TR);
-    for node_i = 1:N_node
-        if node_i ~= t_dest % only unblock nodes that on the shortest path to destination
-            node_next = find(Adj_TR(node_i,:));
-            %phi_minus_pos = (node_i-1)*(N_node+1)*N_task + node_next*N_task + t_index;
-            %phi_plus_pos = (node_i-1)*N_node*N_task + (node_next-1)*N_task + t_index;
-            block_vec_pos = (node_i-1)*N_node*N_task + (node_next-1)*N_task + t_index;
-            Is_Blocked_minus(block_vec_pos) = 0;
-            Is_Blocked_plus(block_vec_pos) = 0;
+for node_i = 1:N_node
+    for node_j = find(Adj(node_i,:))
+        % for all links ij, note that the un-link ij is already blocked by initializing to 1.
+        for t_index = 1:N_task
+            phi_minus_pos = (node_i-1)*(N_node+1)*N_task + node_j*N_task + t_index;
+            phi_plus_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+            block_vec_pos = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+            if Phi_minus(phi_minus_pos) >= eps % if there is non-zeros phi, unblock
+                Is_Blocked_minus(block_vec_pos) = 0;
+            end
+            if Phi_plus(phi_plus_pos) >= eps
+                Is_Blocked_plus(block_vec_pos) = 0;
+            end
         end
     end
 end
+
+% calculate the shortest path to the destination of each task
+% G = graph(Adj);
+% for t_index = 1:N_task
+%     t_dest = Task(t_index,1);
+%     TR = shortestpathtree(G,'all',t_dest);
+%     Adj_TR = adjacency(TR);
+%     for node_i = 1:N_node
+%         if node_i ~= t_dest % only unblock nodes that on the shortest path to destination
+%             node_next = find(Adj_TR(node_i,:));
+%             %phi_minus_pos = (node_i-1)*(N_node+1)*N_task + node_next*N_task + t_index;
+%             %phi_plus_pos = (node_i-1)*N_node*N_task + (node_next-1)*N_task + t_index;
+%             block_vec_pos = (node_i-1)*N_node*N_task + (node_next-1)*N_task + t_index;
+%             Is_Blocked_minus(block_vec_pos) = 0;
+%             Is_Blocked_plus(block_vec_pos) = 0;
+%         end
+%     end
+% end
 
 end
 
@@ -2416,129 +2416,414 @@ length_g = N_node * N_task; % column vector ordered as i, (d,m)
 UB = sum(sum(InputRate))*1.5; % upper bound for all possible computation flow
 computation_cap = UB; %(optional) a sharp upperbound additional to the linear computation cost
 
-length_x_MILP = N_node^2 * 2 * N_task + N_node * N_task * 2; % dimension of x vetcor, arranged with f-ijt,f+ijt,git,wit
-
-% min fx, st. Ax<=b
-
-if ~Is_Initial_LCOR
-    % if not requaired Initial LCOR, just random objective vector
-    f_MILP = ones(1,length_x_MILP);
-else
-    % if required initial local, the objecteive is set to the following:
-    % entries for f- are 1e3 (sufficiently large), to ensure the data flow is minimized;
-    % entries for f+ are given by the marginal cost of link ij at Fij=0, in order to generate a shortest path for result flow
-    % entries for g and w are 0, as compute flow are not to be minimized
-    f_MILP = [ 1e3 * ones(1,length_f_minus) zeros(1,length_x_MILP - length_f_minus)];
-    for node_i = 1:N_node
-        for node_j = find(Adj(node_i,:)) % specify the marginal at F=0
-            if strcmp(Delay_type,'queue') % if queueing delay D = F/(C-F), D'(0) = C/(C-F)^2 = 1/C
-                Margin_Dij = 1 / Delay_para(node_i,node_j);
-            elseif strcmp(Delay_type,'linear') % if linear cost
-                Margin_Dij = Delay_para(node_i,node_j);
-            else
-                error('ERROR: unknown delay type\n');
-            end
-            for t_index = 1:N_task
-                f_plus_pos = length_f_minus + (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
-                f_MILP(f_plus_pos) = Margin_Dij; % Shortest path with marginal at F=0
-                %f_MILP(f_plus_pos) = 1; % Min-hop path
-            end
-        end
-    end
-end
-%f_MILP = [1 zeros(1,length_x_MILP-1)];
-%f_MILP = rand(1,length_x_MILP);
-
-length_constraints = N_node * N_task * 3 + N_node * N_node + N_node; % flow conserv for f- at i,f+ at i, g<U*w at i. And LinkCap for all (i,j), CompCap for all i.
-A_MILP = zeros(length_constraints,length_x_MILP);
-b_MILP = zeros(length_constraints,1);
-for node_i = 1:N_node
-    for t = 1:N_task
-        index_conserv_minus = (node_i-1)*N_task + t;
-        index_conserv_plus = N_node * N_task + (node_i-1)*N_task + t;
-        index_gleqw = 2*N_node*N_task + (node_i-1)*N_task + t;
-        
-        % first set the conserv for f-
-        b_MILP(index_conserv_minus) = -1* InputRate(node_i,t);
-        index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
-        A_MILP(index_conserv_minus,index_g) = -1;
-        for node_j = 1:N_node
-            if Adj(node_j,node_i) > 0 % in-going links (j,i)
-                index_f_minus = (node_j-1)*N_node*N_task + (node_i-1)*N_task + t;
-                A_MILP(index_conserv_minus,index_f_minus) = 1;
-            end
-            if Adj(node_i,node_j) > 0 % out-going links (i,j)
-                index_f_minus = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t;
-                A_MILP(index_conserv_minus,index_f_minus) = -1;
-            end
-        end
-        
-        % then the conserv for f+
-        if Task(t,1) ~= node_i % \sum_j fij+ >= \sum_j fji+ + am*gi + b*wi
-            index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
-            A_MILP(index_conserv_plus,index_g) = a_m(Task(t,2));
-            index_w = N_node^2 * 2 * N_task + N_node * N_task + (node_i-1)*N_task + t;
-            A_MILP(index_conserv_plus,index_w) = b;
-            for node_j = 1:N_node
-                if Adj(node_j,node_i) > 0 % in-going links
-                    index_f_plus = N_node^2*N_task + (node_j-1)*N_node*N_task + (node_i-1)*N_task + t;
-                    A_MILP(index_conserv_plus,index_f_plus) = 1;
+if b >= eps % for the case b~= 0, model wit and use MILP, otherwise do not model wit and use LP
+    length_x_MILP = N_node^2 * 2 * N_task + N_node * N_task * 2; % dimension of x vetcor, arranged with f-ijt,f+ijt,git,wit
+    
+    % min fx, st. Ax<=b
+    
+    if ~Is_Initial_LCOR
+        % if not requaired Initial LCOR, just random objective vector
+        f_MILP = ones(1,length_x_MILP);
+    else
+        % if required initial local, the objecteive is set to the following:
+        % entries for f- are 1e3 (sufficiently large), to ensure the data flow is minimized;
+        % entries for f+ are given by the marginal cost of link ij at Fij=0, in order to generate a shortest path for result flow
+        % entries for g and w are 0, as compute flow are not to be minimized
+        f_MILP = [ 1e3 * ones(1,length_f_minus) zeros(1,length_x_MILP - length_f_minus)];
+        for node_i = 1:N_node
+            for node_j = find(Adj(node_i,:)) % specify the marginal at F=0
+                if strcmp(Delay_type,'queue') % if queueing delay D = F/(C-F), D'(0) = C/(C-F)^2 = 1/C
+                    Margin_Dij = 1 / Delay_para(node_i,node_j);
+                elseif strcmp(Delay_type,'linear') % if linear cost
+                    Margin_Dij = Delay_para(node_i,node_j);
+                else
+                    error('ERROR: unknown delay type\n');
+                end
+                for t_index = 1:N_task
+                    f_plus_pos = length_f_minus + (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+                    f_MILP(f_plus_pos) = Margin_Dij; % Shortest path with marginal at F=0
+                    %f_MILP(f_plus_pos) = 1; % Min-hop path
                 end
             end
         end
-        for node_j = 1:N_node
-            if Adj(node_i,node_j) >0 % out-going links
-                index_f_plus = N_node^2*N_task + (node_i-1)*N_node*N_task + (node_j-1)*N_task + t;
-                A_MILP(index_conserv_plus,index_f_plus) = -1;
+    end
+    %f_MILP = [1 zeros(1,length_x_MILP-1)];
+    %f_MILP = rand(1,length_x_MILP);
+    
+    length_constraints = N_node * N_task * 3 + N_node * N_node + N_node; % flow conserv for f- at i,f+ at i, g<U*w at i. And LinkCap for all (i,j), CompCap for all i.
+    A_MILP = zeros(length_constraints,length_x_MILP);
+    b_MILP = zeros(length_constraints,1);
+    for node_i = 1:N_node
+        for t = 1:N_task
+            index_conserv_minus = (node_i-1)*N_task + t;
+            index_conserv_plus = N_node * N_task + (node_i-1)*N_task + t;
+            index_gleqw = 2*N_node*N_task + (node_i-1)*N_task + t;
+            
+            % first set the conserv for f-
+            b_MILP(index_conserv_minus) = -1* InputRate(node_i,t);
+            index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
+            A_MILP(index_conserv_minus,index_g) = -1;
+            for node_j = 1:N_node
+                if Adj(node_j,node_i) > 0 % in-going links (j,i)
+                    index_f_minus = (node_j-1)*N_node*N_task + (node_i-1)*N_task + t;
+                    A_MILP(index_conserv_minus,index_f_minus) = 1;
+                end
+                if Adj(node_i,node_j) > 0 % out-going links (i,j)
+                    index_f_minus = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t;
+                    A_MILP(index_conserv_minus,index_f_minus) = -1;
+                end
             end
+            
+            % then the conserv for f+
+            if Task(t,1) ~= node_i % \sum_j fij+ >= \sum_j fji+ + am*gi + b*wi
+                index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
+                A_MILP(index_conserv_plus,index_g) = a_m(Task(t,2));
+                index_w = N_node^2 * 2 * N_task + N_node * N_task + (node_i-1)*N_task + t;
+                A_MILP(index_conserv_plus,index_w) = b;
+                for node_j = 1:N_node
+                    if Adj(node_j,node_i) > 0 % in-going links
+                        index_f_plus = N_node^2*N_task + (node_j-1)*N_node*N_task + (node_i-1)*N_task + t;
+                        A_MILP(index_conserv_plus,index_f_plus) = 1;
+                    end
+                end
+            end
+            for node_j = 1:N_node
+                if Adj(node_i,node_j) >0 % out-going links
+                    index_f_plus = N_node^2*N_task + (node_i-1)*N_node*N_task + (node_j-1)*N_task + t;
+                    A_MILP(index_conserv_plus,index_f_plus) = -1;
+                end
+            end
+            
+            % then the constraint gi <= UB * wi
+            index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
+            index_w = N_node^2 * 2 * N_task + N_node * N_task + (node_i-1)*N_task + t;
+            A_MILP(index_gleqw,index_g) = 1;
+            A_MILP(index_gleqw,index_w) = -1 * UB;
         end
         
-        % then the constraint gi <= UB * wi
-        index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
-        index_w = N_node^2 * 2 * N_task + N_node * N_task + (node_i-1)*N_task + t;
-        A_MILP(index_gleqw,index_g) = 1;
-        A_MILP(index_gleqw,index_w) = -1 * UB;
-    end
-    
-    % then the link capacity constraint for all (i,j), sum_t (f-ijt + f+ijt) <= LinkCap
-    for node_j = 1:N_node
-        index_LinkCap = N_node * N_task * 3 + (node_i -1)*N_node + node_j;
-        for t = 1:N_task
-            index_f_minus =  (node_i - 1)*N_node*N_task + (node_j -1)*N_task + t;
-            index_f_plus =  N_node^2*N_task + (node_i - 1)*N_node*N_task + (node_j -1)*N_task + t;
-            A_MILP(index_LinkCap,index_f_minus) = 1;
-            A_MILP(index_LinkCap,index_f_plus) = 1;
+        % then the link capacity constraint for all (i,j), sum_t (f-ijt + f+ijt) <= LinkCap
+        for node_j = 1:N_node
+            index_LinkCap = N_node * N_task * 3 + (node_i -1)*N_node + node_j;
+            for t = 1:N_task
+                index_f_minus =  (node_i - 1)*N_node*N_task + (node_j -1)*N_task + t;
+                index_f_plus =  N_node^2*N_task + (node_i - 1)*N_node*N_task + (node_j -1)*N_task + t;
+                A_MILP(index_LinkCap,index_f_minus) = 1;
+                A_MILP(index_LinkCap,index_f_plus) = 1;
+            end
+            b_MILP(index_LinkCap) = LinkCap(node_i,node_j);
         end
-        b_MILP(index_LinkCap) = LinkCap(node_i,node_j);
+        
+        % then the computation capacity for all nodes, sum_t git <= CompCap
+        index_CompCap = N_node * N_task *3 + N_node * N_node + node_i;
+        for t = 1:N_task
+            index_g_it = N_node^2*N_task*2 + (node_i -1)*N_task + t;
+            A_MILP(index_CompCap,index_g_it) = 1;
+        end
+        b_MILP(index_CompCap) = CompCap(node_i);
     end
     
-    % then the computation capacity for all nodes, sum_t git <= CompCap
-    index_CompCap = N_node * N_task *3 + N_node * N_node + node_i;
-    for t = 1:N_task
-        index_g_it = N_node^2*N_task*2 + (node_i -1)*N_task + t;
-        A_MILP(index_CompCap,index_g_it) = 1;
+    x_lb_MILP = zeros(1,length_x_MILP);
+    x_ub_MILP = [UB*ones(1,N_node^2 * 2 * N_task) computation_cap*ones(1,N_node * N_task) ones(1,N_node * N_task)];
+    int_index = N_node^2 * 2 * N_task + N_node * N_task + 1 : N_node^2 * 2 * N_task + 2 * N_node * N_task;
+    options =  optimoptions(@intlinprog,'Display','off');
+    fprintf('Init_Generator: begin solving MILP...\n');
+    [x_opt_MILP, cost_opt_MILP,exitflag] = intlinprog(f_MILP,int_index,A_MILP,b_MILP,[],[],x_lb_MILP,x_ub_MILP,options);
+    fprintf('Init_Generator: MILP finished\n');
+    if exitflag <= 0 % No feasible solution or unbounded
+        Is_Success = 0;
+        f_minus_init = zeros(length_f_minus,1);
+        f_plus_init = zeros(length_f_plus,1);
+        g_comp_init = zeros(length_g,1);
+    else
+        Is_Success = 1;
+        x_opt_MILP = reshape(x_opt_MILP,[],1);
+        f_minus_init = x_opt_MILP(1:length_f_minus);
+        f_plus_init = x_opt_MILP(length_f_minus +1 : length_f_minus + length_f_plus);
+        g_comp_init = x_opt_MILP(length_f_minus + length_f_plus + 1: length_f_minus + length_f_plus + length_g);
+        w_comp_init = x_opt_MILP(length_f_minus + length_f_plus + length_g + 1: end);
     end
-    b_MILP(index_CompCap) = CompCap(node_i);
+    
+else % case b = 0, use LP
+    length_x_LP = N_node^2 * 2 * N_task + N_node * N_task ; % dimension of x vetcor, arranged with f-ijt,f+ijt,git
+    length_constraints = N_node * N_task * 2 + N_node * N_node + N_node; % flow conserv for f- at i,f+ at i. And LinkCap for all (i,j), CompCap for all i.
+    if ~Is_Initial_LCOR
+        % if not requaired Initial LCOR, just random objective vector
+        f_LP = ones(1,length_x_LP);
+    else
+        % if required initial local, the objecteive is set to the following:
+        % entries for f- are 1e3 (sufficiently large), to ensure the data flow is minimized;
+        % entries for f+ are given by the marginal cost of link ij at Fij=0, in order to generate a shortest path for result flow
+        % entries for g are 0, as compute flow are not to be minimized
+        f_LP = [ 1e3 * ones(1,length_f_minus) zeros(1,length_x_LP - length_f_minus)];
+        for node_i = 1:N_node
+            for node_j = find(Adj(node_i,:)) % specify the marginal at F=0
+                if strcmp(Delay_type,'queue') % if queueing delay D = F/(C-F), D'(0) = C/(C-F)^2 = 1/C
+                    Margin_Dij = 1 / Delay_para(node_i,node_j);
+                elseif strcmp(Delay_type,'linear') % if linear cost
+                    Margin_Dij = Delay_para(node_i,node_j);
+                else
+                    error('ERROR: unknown delay type\n');
+                end
+                for t_index = 1:N_task
+                    f_plus_pos = length_f_minus + (node_i-1)*N_node*N_task + (node_j-1)*N_task + t_index;
+                    f_LP(f_plus_pos) = Margin_Dij; % Shortest path with marginal at F=0
+                    %f_MILP(f_plus_pos) = 1; % Min-hop path
+                end
+            end
+        end
+    end
+    
+     A_LP = zeros(length_constraints,length_x_LP);
+    b_LP = zeros(length_constraints,1);
+    
+     for node_i = 1:N_node
+        for t = 1:N_task
+            index_conserv_minus = (node_i-1)*N_task + t;
+            index_conserv_plus = N_node * N_task + (node_i-1)*N_task + t;
+            
+            % first set the conserv for f-
+            b_LP(index_conserv_minus) = -1* InputRate(node_i,t);
+            index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
+            A_LP(index_conserv_minus,index_g) = -1;
+            for node_j = 1:N_node
+                if Adj(node_j,node_i) > 0 % in-going links (j,i)
+                    index_f_minus = (node_j-1)*N_node*N_task + (node_i-1)*N_task + t;
+                    A_LP(index_conserv_minus,index_f_minus) = 1;
+                end
+                if Adj(node_i,node_j) > 0 % out-going links (i,j)
+                    index_f_minus = (node_i-1)*N_node*N_task + (node_j-1)*N_task + t;
+                    A_LP(index_conserv_minus,index_f_minus) = -1;
+                end
+            end
+            
+            % then the conserv for f+
+            if Task(t,1) ~= node_i % \sum_j fij+ >= \sum_j fji+ + am*gi + b*wi
+                index_g = N_node^2 * 2 * N_task + (node_i-1)*N_task + t;
+                A_LP(index_conserv_plus,index_g) = a_m(Task(t,2));
+                %index_w = N_node^2 * 2 * N_task + N_node * N_task + (node_i-1)*N_task + t;
+                %A_LP(index_conserv_plus,index_w) = b;
+                for node_j = 1:N_node
+                    if Adj(node_j,node_i) > 0 % in-going links
+                        index_f_plus = N_node^2*N_task + (node_j-1)*N_node*N_task + (node_i-1)*N_task + t;
+                        A_LP(index_conserv_plus,index_f_plus) = 1;
+                    end
+                end
+            end
+            for node_j = 1:N_node
+                if Adj(node_i,node_j) >0 % out-going links
+                    index_f_plus = N_node^2*N_task + (node_i-1)*N_node*N_task + (node_j-1)*N_task + t;
+                    A_LP(index_conserv_plus,index_f_plus) = -1;
+                end
+            end
+            
+        end
+        
+        % then the link capacity constraint for all (i,j), sum_t (f-ijt + f+ijt) <= LinkCap
+        for node_j = 1:N_node
+            index_LinkCap = N_node * N_task * 2 + (node_i -1)*N_node + node_j;
+            for t = 1:N_task
+                index_f_minus =  (node_i - 1)*N_node*N_task + (node_j -1)*N_task + t;
+                index_f_plus =  N_node^2*N_task + (node_i - 1)*N_node*N_task + (node_j -1)*N_task + t;
+                A_LP(index_LinkCap,index_f_minus) = 1;
+                A_LP(index_LinkCap,index_f_plus) = 1;
+            end
+            b_LP(index_LinkCap) = LinkCap(node_i,node_j);
+        end
+        
+        % then the computation capacity for all nodes, sum_t git <= CompCap
+        index_CompCap = N_node * N_task *2 + N_node * N_node + node_i;
+        for t = 1:N_task
+            index_g_it = N_node^2*N_task*2 + (node_i -1)*N_task + t;
+            A_LP(index_CompCap,index_g_it) = 1;
+        end
+        b_LP(index_CompCap) = CompCap(node_i);
+     end
+    
+     x_lb_LP = zeros(1,length_x_LP);
+    options =  optimoptions(@linprog,'Display','off');
+    fprintf('Init_Generator: begin solving LP...\n');
+    [x_opt_LP, cost_opt_LP,exitflag] = linprog(f_LP,A_LP,b_LP,[],[],x_lb_LP,[],options);
+    fprintf('Init_Generator: LP finished\n');
+    
+    if exitflag <= 0 % No feasible solution or unbounded
+        Is_Success = 0;
+        f_minus_init = zeros(length_f_minus,1);
+        f_plus_init = zeros(length_f_plus,1);
+        g_comp_init = zeros(length_g,1);
+    else
+        Is_Success = 1;
+        x_opt_LP = reshape(x_opt_LP,[],1);
+        f_minus_init = x_opt_LP(1:length_f_minus);
+        f_plus_init = x_opt_LP(length_f_minus +1 : length_f_minus + length_f_plus);
+        g_comp_init = x_opt_LP(length_f_minus + length_f_plus + 1: length_f_minus + length_f_plus + length_g);
+    end
+     
 end
 
-x_lb_MILP = zeros(1,length_x_MILP);
-x_ub_MILP = [UB*ones(1,N_node^2 * 2 * N_task) computation_cap*ones(1,N_node * N_task) ones(1,N_node * N_task)];
-int_index = N_node^2 * 2 * N_task + N_node * N_task + 1 : N_node^2 * 2 * N_task + 2 * N_node * N_task;
-options =  optimoptions(@intlinprog,'Display','off');
-[x_opt_MILP, cost_opt_MILP,exitflag] = intlinprog(f_MILP,int_index,A_MILP,b_MILP,[],[],x_lb_MILP,x_ub_MILP,options);
+end
 
-if exitflag <= 0 % No feasible solution or unbounded
-    Is_Success = 0;
-    f_minus_init = zeros(length_f_minus,1);
-    f_plus_init = zeros(length_f_plus,1);
-    g_comp_init = zeros(length_g,1);
-else
-    Is_Success = 1;
-    x_opt_MILP = reshape(x_opt_MILP,[],1);
-    f_minus_init = x_opt_MILP(1:length_f_minus);
-    f_plus_init = x_opt_MILP(length_f_minus +1 : length_f_minus + length_f_plus);
-    g_comp_init = x_opt_MILP(length_f_minus + length_f_plus + 1: length_f_minus + length_f_plus + length_g);
-    w_comp_init = x_opt_MILP(length_f_minus + length_f_plus + length_g + 1: end);
+function [Is_Success,f_minus_init,f_plus_init,g_comp_init] = ...
+    Init_Generator2_MILP(Adj,Task,InputRate,a_m,b, Delay_type,Delay_para,CompCost_type,CompCost_para, LinkCap,CompCap,Is_Initial_LCOR)
+% Improved initial state generator, reduce the memory size
+% formulate the LP/MILP wrt the link, not (node,node)
+
+N_node = length(Adj);
+N_task = size(Task,1);
+G = digraph(Adj);
+%N_edge = G.numedges * 2;
+ [sOut,tOut] = findedge( G );
+Edge = [sOut tOut]; % list of all edges (directed), each row is the [node_i,node_j]
+N_edge = size(Edge,1);
+
+length_f_minus = N_edge * N_task;
+length_f_plus = N_edge * N_task;
+length_g = N_node * N_task;
+
+UB = sum(sum(InputRate))*1.5; % upper bound for all possible computation flow
+computation_cap = UB; %(optional) a sharp upperbound additional to the linear computation cost
+
+if b >= eps % for the case b~= 0, model wit and use MILP, otherwise do not model wit and use LP
+    error('Init_Generator2: Not yet implemented.');
+else % case of b = 0, use LP
+    length_x_LP = length_f_minus + length_f_plus + length_g; % dimension of x vetcor, arranged with f-ijt,f+ijt,git
+    length_constraints = N_node * N_task * 2 + N_edge + N_node; % flow conserv for f- at i,f+ at i. And LinkCap for all (i,j), CompCap for all i.
+    if ~Is_Initial_LCOR
+        % if not requaired Initial LCOR, just random objective vector
+        f_LP = ones(1,length_x_LP);
+    else
+        % if required initial local, the objecteive is set to the following:
+        % entries for f- are 1e3 (sufficiently large), to ensure the data flow is minimized;
+        % entries for f+ are given by the marginal cost of link ij at Fij=0, in order to generate a shortest path for result flow
+        % entries for g are 0, as compute flow are not to be minimized
+        f_LP = [ 1e3 * ones(1,length_f_minus) zeros(1,length_x_LP - length_f_minus)];
+        for node_i = 1:N_node
+            for node_j = find(Adj(node_i,:)) % specify the marginal at F=0
+                if strcmp(Delay_type,'queue') % if queueing delay D = F/(C-F), D'(0) = C/(C-F)^2 = 1/C
+                    Margin_Dij = 1 / Delay_para(node_i,node_j);
+                elseif strcmp(Delay_type,'linear') % if linear cost
+                    Margin_Dij = Delay_para(node_i,node_j);
+                else
+                    error('ERROR: unknown delay type\n');
+                end
+                for t_index = 1:N_task
+                    [tf, edge_index]=ismember([node_i node_j],Edge,'rows');
+                    f_plus_pos = length_f_minus + (edge_index -1)*N_task + t_index;
+                    f_LP(f_plus_pos) = Margin_Dij; % Shortest path with marginal at F=0
+                    %f_MILP(f_plus_pos) = 1; % Min-hop path
+                end
+            end
+        end
+    end
+    
+    A_LP = zeros(length_constraints,length_x_LP);
+    b_LP = zeros(length_constraints,1);
+    
+    for node_i = 1:N_node
+        for t = 1:N_task
+            % position in constraints
+            index_conserv_minus = (node_i-1)*N_task + t;
+            index_conserv_plus = N_node * N_task + (node_i-1)*N_task + t;
+            
+            % first set the conserv for f-
+            b_LP(index_conserv_minus) = -1* InputRate(node_i,t);
+            index_g = length_f_minus + length_f_plus + (node_i-1)*N_task + t;
+            A_LP(index_conserv_minus,index_g) = -1;
+            for node_j = 1:N_node
+                if Adj(node_j,node_i) > 0 % in-going links (j,i)
+                    [tf, edge_index]=ismember([node_j node_i],Edge,'rows');
+                    index_f_minus = (edge_index -1)*N_task + t;
+                    A_LP(index_conserv_minus,index_f_minus) = 1;
+                end
+                if Adj(node_i,node_j) > 0 % out-going links (i,j)
+                    [tf, edge_index]=ismember([node_i node_j],Edge,'rows');
+                    index_f_minus = (edge_index -1)*N_task + t;
+                    A_LP(index_conserv_minus,index_f_minus) = -1;
+                end
+            end
+            
+            % then the conserv for f+
+            if Task(t,1) ~= node_i % \sum_j fij+ >= \sum_j fji+ + am*gi + b*wi
+                index_g = length_f_minus + length_f_plus  + (node_i-1)*N_task + t;
+                A_LP(index_conserv_plus,index_g) = a_m(Task(t,2));
+                %index_w = N_node^2 * 2 * N_task + N_node * N_task + (node_i-1)*N_task + t;
+                %A_LP(index_conserv_plus,index_w) = b;
+                for node_j = 1:N_node
+                    if Adj(node_j,node_i) > 0 % in-going links
+                        [tf, edge_index]=ismember([node_j node_i],Edge,'rows');
+                        index_f_plus = length_f_minus + (edge_index -1)*N_task + t;
+                        A_LP(index_conserv_plus,index_f_plus) = 1;
+                    end
+                end
+            end
+            for node_j = 1:N_node
+                if Adj(node_i,node_j) >0 % out-going links
+                    [tf, edge_index]=ismember([node_i node_j],Edge,'rows');
+                    index_f_plus = length_f_minus + (edge_index -1)*N_task + t;
+                    A_LP(index_conserv_plus,index_f_plus) = -1;
+                end
+            end
+            
+        end
+        
+        % then the link capacity constraint for all (i,j), sum_t (f-ijt + f+ijt) <= LinkCap
+        for node_j = find(Adj(node_i,:)) % for all (i,j) in E
+            [tf, edge_index]=ismember([node_i node_j],Edge,'rows');
+            index_LinkCap = N_node * N_task * 2 + edge_index; % constraint position
+            for t = 1:N_task
+                index_f_minus =  (edge_index -1)*N_task + t;
+                index_f_plus =  length_f_minus + (edge_index -1)*N_task + t;
+                A_LP(index_LinkCap,index_f_minus) = 1;
+                A_LP(index_LinkCap,index_f_plus) = 1;
+            end
+            b_LP(index_LinkCap) = LinkCap(node_i,node_j);
+        end
+        
+        % then the computation capacity for all nodes, sum_t git <= CompCap
+        index_CompCap = N_node * N_task *2 + N_edge + node_i;
+        for t = 1:N_task
+            index_g_it = length_f_minus + length_f_plus + (node_i -1)*N_task + t;
+            A_LP(index_CompCap,index_g_it) = 1;
+        end
+        b_LP(index_CompCap) = CompCap(node_i);
+    end
+    
+    x_lb_LP = zeros(1,length_x_LP);
+    options =  optimoptions(@linprog,'Display','off');
+    fprintf('Init_Generator2: begin solving LP...\n');
+    [x_opt_LP, cost_opt_LP,exitflag] = linprog(f_LP,A_LP,b_LP,[],[],x_lb_LP,[],options);
+    fprintf('Init_Generator: LP finished\n');
+    
+    if exitflag <= 0 % No feasible solution or unbounded
+        Is_Success = 0;
+        f_minus_init_edge = zeros(length_f_minus,1);
+        f_plus_init_edge = zeros(length_f_plus,1);
+        g_comp_init_edge = zeros(length_g,1);
+    else
+        Is_Success = 1;
+        x_opt_LP = reshape(x_opt_LP,[],1);
+        f_minus_init_edge = x_opt_LP(1:length_f_minus);
+        f_plus_init_edge = x_opt_LP(length_f_minus +1 : length_f_minus + length_f_plus);
+        g_comp_init_edge = x_opt_LP(length_f_minus + length_f_plus + 1: length_f_minus + length_f_plus + length_g);
+    end
+    
+    % finally change edge-based variable to node pair-based
+    length_f_minus_output = N_node*N_node*N_task;
+    length_f_plus_output = N_node*N_node*N_task;
+    length_g_output = N_node * N_task;
+    f_minus_init = zeros(length_f_minus_output,1);
+    f_plus_init = zeros(length_f_plus_output,1);
+    %g_comp_init = zeros(length_g_output,1);
+    for t_index = 1:N_task
+        for edge_index = 1:N_edge
+            node_i = Edge(edge_index,1);
+            node_j = Edge(edge_index,2);
+            pos_f_edge = (edge_index -1)*N_task + t_index;
+            pos_f_init = (node_i -1)*N_node*N_task + (node_j-1)*N_task + t_index;
+            f_minus_init(pos_f_init) = f_minus_init_edge(pos_f_edge);
+            f_plus_init(pos_f_init) = f_plus_init_edge(pos_f_edge);
+        end
+    end
+    g_comp_init = g_comp_init_edge;
 end
 
 end
