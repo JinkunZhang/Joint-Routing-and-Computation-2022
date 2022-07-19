@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Zhang"
+  given-names: "Jinkun"
+- family-names: "Lisa"
+title: "Joint-Routing-and-Computation-2022"
+version: 1.0.0
+date-released: 2022-07-18
+url: "https://github.com/JinkunZhang/Joint-Routing-and-Computation-2022"
